@@ -1,0 +1,69 @@
+# -*- coding: utf-8 -*-
+"""
+配置模块初始化文件
+提供配置的统一访问接口
+"""
+
+# ==================== 导入所有配置 ====================
+# 路径配置
+from .paths import (
+    ROOT_DIR, DATA_DIR, CACHE_DIR, TEMP_DIR,
+    OUTPUT_DIR, IMAGES_DIR, OUTPUT_DATA_DIR,
+    UTILS_DIR, SRC_DIR, SCRIPT_DIR, TESTS_DIR,
+    SUPPORTED_IMAGE_FORMATS, SUPPORTED_DATA_FORMATS,
+    DEFAULT_IMAGE_FORMAT, DEFAULT_DATA_FORMAT
+)
+
+# 数据字段映射配置
+from .data_mapping import (
+    FIELD_MAPPING_CACHE_FILE, DEFAULT_FIELD_MAPPING, CURRENT_DATA_SOURCE
+)
+
+# 数据处理配置
+from .data_processing import (
+    GLOBAL_DATA_PROCESSING_CONFIG, DATA_PREPROCESSING_CONFIG,
+    DATA_PROCESSING_CONFIG
+)
+
+# 特征工程配置
+from .features import (
+    FEATURE_ENGINEERING_CONFIG, DATA_TRANSFORMATION_CONFIG
+)
+
+# 模型配置
+from .models import (
+    ARIMA_TRAINING_CONFIG
+)
+
+# 功能模块配置
+from .modules import (
+    BASIC_ANALYSIS_CONFIG, PURCHASE_REDEMPTION_CONFIG,
+    CASH_FLOW_PREDICTION_CONFIG, MODEL_EVALUATION_CONFIG
+)
+
+# ==================== 配置导出 ====================
+__all__ = [
+    # 路径配置
+    'ROOT_DIR', 'DATA_DIR', 'CACHE_DIR', 'TEMP_DIR',
+    'OUTPUT_DIR', 'IMAGES_DIR', 'OUTPUT_DATA_DIR',
+    'UTILS_DIR', 'SRC_DIR', 'SCRIPT_DIR', 'TESTS_DIR',
+    'SUPPORTED_IMAGE_FORMATS', 'SUPPORTED_DATA_FORMATS',
+    'DEFAULT_IMAGE_FORMAT', 'DEFAULT_DATA_FORMAT',
+    
+    # 数据字段映射配置
+    'FIELD_MAPPING_CACHE_FILE', 'DEFAULT_FIELD_MAPPING', 'CURRENT_DATA_SOURCE',
+    
+    # 数据处理配置
+    'GLOBAL_DATA_PROCESSING_CONFIG', 'DATA_PREPROCESSING_CONFIG',
+    'DATA_PROCESSING_CONFIG',
+    
+    # 特征工程配置
+    'FEATURE_ENGINEERING_CONFIG', 'DATA_TRANSFORMATION_CONFIG',
+    
+    # 模型配置
+    'ARIMA_TRAINING_CONFIG',
+    
+    # 功能模块配置
+    'BASIC_ANALYSIS_CONFIG', 'PURCHASE_REDEMPTION_CONFIG',
+    'CASH_FLOW_PREDICTION_CONFIG', 'MODEL_EVALUATION_CONFIG'
+] 

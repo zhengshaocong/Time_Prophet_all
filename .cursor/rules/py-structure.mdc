@@ -1,0 +1,17 @@
+--------
+description: py程序的基本结构
+globs:
+  - "**/*.py"
+alwaysApply: true
+--------
+
+run.py 启动文件
+main.py 主程序
+config.py 程序配置
+script 次要程序文件夹
+output 生成文件
+data 原始数据
+utils 工具文件夹
+cache 缓存内容
+src 主程序的内容分支
+temp 临时文件
