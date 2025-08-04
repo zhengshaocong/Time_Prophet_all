@@ -1,45 +1,53 @@
 # -*- coding: utf-8 -*-
 """
 资金流预测主模块
-包含基础数据处理、数据可视化等功能
+整合申购赎回分析和ARIMA预测功能
 """
 
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  # 使用非交互式后端
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
-from datetime import datetime
 import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
 
-from config import (
-    DATA_DIR, IMAGES_DIR, OUTPUT_DATA_DIR,
-    get_data_field_mapping, get_field_name, get_time_format, 
-    get_preprocessing_config, CURRENT_DATA_SOURCE
+from utils.data_processor import DataProcessor
+from utils.visualization_utils import (
+    setup_matplotlib, create_time_series_plot, create_histogram,
+    create_balance_change_plot, create_monthly_comparison_plot,
+    save_plot, close_plot
 )
-from utils.interactive_utils import print_header, print_success, print_error
+from utils.interactive_utils import print_header, print_success, print_error, print_info
 from utils.file_utils import write_json
-
+from config import DATA_DIR, CURRENT_DATA_SOURCE
+from utils.config_utils import (
+    get_data_field_mapping, get_field_name, get_time_format,
+    get_preprocessing_config, check_data_source_dispose_config,
+    get_missing_dispose_config_message
+)
+from utils.data_processing_manager import get_data_for_module, should_process_data
+from src.prediction.arima_predictor import ARIMAPredictor
+from src.prediction.cash_flow_predictor import CashFlowPredictor
 
 class CashFlowPrediction:
     """资金流预测主类"""
     
     def __init__(self):
-        """初始化资金流预测系统"""
+        """初始化资金流预测"""
         self.data = None
-        self.data_info = {}
-        
+        self.data_info = None
+        self.module_name = "cash_flow_prediction"
+    
     def load_data(self, file_path=None):
         """
-        加载数据文件
+        加载数据
         
         Args:
-            file_path: 数据文件路径，默认为data/user_balance_table.csv
+            file_path: 数据文件路径
         """
         if file_path is None:
             file_path = DATA_DIR / "user_balance_table.csv"
-            
+        
         try:
             self.data = pd.read_csv(file_path)
             print_success(f"数据加载成功: {file_path}")
@@ -51,7 +59,7 @@ class CashFlowPrediction:
     
     def analyze_data_structure(self, top_rows=5):
         """
-        分析数据结构并解析字段
+        分析数据结构
         
         Args:
             top_rows: 显示前几行数据
@@ -59,50 +67,40 @@ class CashFlowPrediction:
         if self.data is None:
             print_error("请先加载数据")
             return False
-            
-        print_header("数据结构分析", "字段解析")
         
-        # 获取前几行数据
-        top_data = self.data.head(top_rows)
+        print_header("数据结构分析", "字段信息")
         
-        # 分析字段信息
-        field_info = {}
-        for column in self.data.columns:
-            field_info[column] = {
-                "数据类型": str(self.data[column].dtype),
-                "非空值数量": int(self.data[column].count()),
-                "空值数量": int(self.data[column].isnull().sum()),
-                "唯一值数量": int(self.data[column].nunique()),
-                "示例值": str(self.data[column].iloc[0]) if len(self.data) > 0 else "无"
-            }
-            
-            # 对于数值型数据，添加统计信息
-            if self.data[column].dtype in ['int64', 'float64']:
-                field_info[column].update({
-                    "最小值": float(self.data[column].min()),
-                    "最大值": float(self.data[column].max()),
-                    "平均值": float(self.data[column].mean()),
-                    "中位数": float(self.data[column].median())
-                })
+        # 基本信息
+        print(f"数据形状: {self.data.shape}")
+        print(f"字段数量: {len(self.data.columns)}")
+        print(f"字段列表: {list(self.data.columns)}")
+        
+        # 数据类型
+        print("\n数据类型:")
+        for col, dtype in self.data.dtypes.items():
+            print(f"  {col}: {dtype}")
+        
+        # 缺失值统计
+        print("\n缺失值统计:")
+        missing_counts = self.data.isnull().sum()
+        for col, count in missing_counts.items():
+            if count > 0:
+                print(f"  {col}: {count} ({count/len(self.data)*100:.2f}%)")
+        
+        # 前几行数据
+        print(f"\n前{top_rows}行数据:")
+        print(self.data.head(top_rows))
         
         # 保存分析结果
         self.data_info = {
-            "数据形状": list(self.data.shape),
-            "字段信息": field_info,
-            "前几行数据": top_data.to_dict('records'),
-            "分析时间": datetime.now().isoformat()
+            "数据形状": self.data.shape,
+            "字段数量": len(self.data.columns),
+            "字段列表": list(self.data.columns),
+            "数据类型": self.data.dtypes.to_dict(),
+            "缺失值统计": missing_counts.to_dict(),
+            "前几行数据": self.data.head(top_rows).to_dict('records'),
+            "分析时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        
-        # 输出分析结果
-        print(f"数据形状: {self.data.shape[0]} 行 × {self.data.shape[1]} 列")
-        print("\n字段信息:")
-        for field, info in field_info.items():
-            print(f"  {field}:")
-            for key, value in info.items():
-                print(f"    {key}: {value}")
-        
-        print(f"\n前{top_rows}行数据:")
-        print(top_data.to_string(index=False))
         
         return True
     
@@ -118,11 +116,11 @@ class CashFlowPrediction:
             return False
             
         if output_file is None:
-            output_file = DATA_DIR / "data_analysis.md"
+            output_file = DATA_DIR / "cash_flow_analysis.md"
             
         try:
             # 创建Markdown格式的分析报告
-            md_content = f"""# 资金流数据字段分析报告
+            md_content = f"""# 资金流预测数据分析报告
 
 ## 数据概览
 - **数据形状**: {self.data_info['数据形状'][0]} 行 × {self.data_info['数据形状'][1]} 列
@@ -132,25 +130,25 @@ class CashFlowPrediction:
 
 """
             
+            # 添加字段信息
             for field, info in self.data_info['字段信息'].items():
                 md_content += f"### {field}\n"
                 for key, value in info.items():
                     md_content += f"- **{key}**: {value}\n"
                 md_content += "\n"
             
-            md_content += "## 数据示例\n\n"
+            # 添加前几行数据
+            md_content += "## 前几行数据\n"
             md_content += "```\n"
-            if self.data_info['前几行数据']:
-                # 转换为DataFrame以便格式化显示
-                df_sample = pd.DataFrame(self.data_info['前几行数据'])
-                md_content += df_sample.to_string(index=False)
-            md_content += "\n```\n"
+            for record in self.data_info['前几行数据']:
+                md_content += str(record) + "\n"
+            md_content += "```\n"
             
-            # 保存Markdown文件
+            # 保存到文件
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(md_content)
-                
-            print_success(f"数据分析报告已保存: {output_file}")
+            
+            print_success(f"分析报告已保存: {output_file}")
             return True
             
         except Exception as e:
@@ -159,11 +157,10 @@ class CashFlowPrediction:
     
     def preprocess_data_for_purchase_redemption(self, data_source=None):
         """
-        预处理数据以区分申购和赎回
-        基于配置文件中的字段映射，支持不同数据源
+        为申购赎回分析预处理数据
         
         Args:
-            data_source: 数据源名称，如果为None则使用当前配置的数据源
+            data_source: 数据源名称，如果为None则自动检测
         """
         if self.data is None:
             print_error("请先加载数据")
@@ -172,9 +169,21 @@ class CashFlowPrediction:
         print_header("数据预处理", "区分申购和赎回")
         
         try:
-            # 获取字段映射配置
+            # 获取字段映射配置（会自动检测数据源）
             field_mapping = get_data_field_mapping(data_source)
             preprocessing_config = get_preprocessing_config()
+            
+            # 检查必要的字段是否存在
+            required_fields = ["时间字段", "申购金额字段", "赎回金额字段", "当前余额字段", "昨日余额字段"]
+            missing_fields = []
+            for field_type in required_fields:
+                if field_type not in field_mapping:
+                    missing_fields.append(field_type)
+            
+            if missing_fields:
+                print_error(f"缺少必要的字段映射: {', '.join(missing_fields)}")
+                print_error("请先运行基础数据分析生成数据源配置文件")
+                return False
             
             # 获取字段名
             time_field = field_mapping["时间字段"]
@@ -231,7 +240,10 @@ class CashFlowPrediction:
                             self.data[field] = self.data[field].clip(lower_bound, upper_bound)
             
             print_success("数据预处理完成")
-            print(f"数据源: {data_source or CURRENT_DATA_SOURCE}")
+            # 自动检测数据源名称用于显示
+            dispose_files = list(DATA_DIR.glob("*_dispose.json"))
+            detected_source = dispose_files[0].stem.replace("_dispose", "") if dispose_files else "unknown"
+            print(f"数据源: {data_source or detected_source}")
             print(f"总记录数: {len(self.data)}")
             print(f"有申购记录数: {len(self.data[self.data['Purchase_Amount'] > 0])}")
             print(f"有赎回记录数: {len(self.data[self.data['Redemption_Amount'] > 0])}")

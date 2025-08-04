@@ -4,12 +4,13 @@
 提供配置管理、验证、获取等功能
 """
 
+import json
+from pathlib import Path
 from config import (
     DATA_DIR, CACHE_DIR, TEMP_DIR, OUTPUT_DIR, IMAGES_DIR, OUTPUT_DATA_DIR,
     UTILS_DIR, SRC_DIR, SCRIPT_DIR, TESTS_DIR, DEFAULT_FIELD_MAPPING,
     DATA_PREPROCESSING_CONFIG, ARIMA_TRAINING_CONFIG, CURRENT_DATA_SOURCE
 )
-from utils.cache_utils import has_field_mapping_cache, load_field_mapping_cache
 from utils.interactive_utils import print_header, print_success, print_error, print_info
 
 
@@ -42,23 +43,70 @@ def get_config_info():
     }
 
 
+def get_data_source_dispose_file(data_source_name):
+    """
+    获取数据源的dispose配置文件路径
+    
+    Args:
+        data_source_name: 数据源名称（不包含扩展名）
+        
+    Returns:
+        Path: dispose配置文件路径
+    """
+    return DATA_DIR / f"{data_source_name}_dispose.json"
+
+
+def load_data_source_dispose_config(data_source_name):
+    """
+    加载数据源的dispose配置文件
+    
+    Args:
+        data_source_name: 数据源名称（不包含扩展名）
+        
+    Returns:
+        dict: 配置字典，如果文件不存在返回None
+    """
+    dispose_file = get_data_source_dispose_file(data_source_name)
+    
+    if not dispose_file.exists():
+        return None
+    
+    try:
+        with open(dispose_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        return config
+    except Exception as e:
+        print_error(f"读取数据源配置文件失败: {e}")
+        return None
+
+
 def get_data_field_mapping(data_source=None):
     """
     获取数据字段映射配置
     
     Args:
-        data_source: 数据源名称，如果为None则使用当前配置的数据源
+        data_source: 数据源名称，如果为None则自动检测数据源
         
     Returns:
         dict: 字段映射配置
     """
-    # 首先尝试从缓存读取
-    cached_mapping = load_field_mapping_cache()
-    if cached_mapping:
-        return cached_mapping
+    # 如果没有指定数据源，尝试自动检测
+    if data_source is None:
+        # 查找data目录中的dispose配置文件
+        dispose_files = list(DATA_DIR.glob("*_dispose.json"))
+        if dispose_files:
+            # 使用第一个找到的配置文件
+            data_source = dispose_files[0].stem.replace("_dispose", "")
+            print(f"自动检测到数据源: {data_source}")
     
-    # 如果没有缓存，返回默认配置
-    print("⚠ 未找到字段映射缓存，请先运行基础数据分析生成缓存")
+    # 尝试从数据源特定的dispose文件读取
+    if data_source:
+        dispose_config = load_data_source_dispose_config(data_source)
+        if dispose_config and "field_mapping" in dispose_config:
+            return dispose_config["field_mapping"]
+    
+    # 如果没有特定配置，返回默认配置
+    print("⚠ 未找到数据源配置文件，请先运行基础数据分析生成配置")
     return DEFAULT_FIELD_MAPPING
 
 
@@ -68,7 +116,7 @@ def get_field_name(field_type, data_source=None):
     
     Args:
         field_type: 字段类型（如"时间字段"、"申购金额字段"等）
-        data_source: 数据源名称
+        data_source: 数据源名称，如果为None则自动检测
         
     Returns:
         str: 字段名
@@ -82,13 +130,50 @@ def get_time_format(data_source=None):
     获取时间格式
     
     Args:
-        data_source: 数据源名称
+        data_source: 数据源名称，如果为None则自动检测
         
     Returns:
         str: 时间格式字符串
     """
     mapping = get_data_field_mapping(data_source)
     return mapping.get("时间格式")
+
+
+def check_data_source_dispose_config(data_source_name):
+    """
+    检查数据源是否有dispose配置文件
+    
+    Args:
+        data_source_name: 数据源名称（不包含扩展名）
+        
+    Returns:
+        bool: 是否存在配置文件
+    """
+    dispose_file = get_data_source_dispose_file(data_source_name)
+    return dispose_file.exists()
+
+
+def get_missing_dispose_config_message(data_source_name):
+    """
+    获取缺失dispose配置文件的提示信息
+    
+    Args:
+        data_source_name: 数据源名称（不包含扩展名）
+        
+    Returns:
+        str: 提示信息
+    """
+    return f"""
+⚠ 未找到数据源配置文件: {data_source_name}_dispose.json
+
+请先运行基础数据分析功能来生成数据源特定的配置。
+基础数据分析将自动检测数据字段并生成相应的配置。
+
+建议操作：
+1. 运行基础数据分析功能
+2. 系统将自动生成 {data_source_name}_dispose.json 配置文件
+3. 然后重新运行当前功能
+"""
 
 
 def get_preprocessing_config():
@@ -299,14 +384,18 @@ def show_current_config():
         print(f"  {key}: {value}")
     
     # 显示字段映射信息
-    if has_field_mapping_cache():
-        field_mapping = load_field_mapping_cache()
-        if field_mapping:
-            print(f"\n字段映射缓存: 已加载 ({len(field_mapping)} 个字段)")
+    # 现在直接从数据源配置文件读取
+    if check_data_source_dispose_config(CURRENT_DATA_SOURCE):
+        dispose_config = load_data_source_dispose_config(CURRENT_DATA_SOURCE)
+        if dispose_config and "field_mapping" in dispose_config:
+            field_mapping = dispose_config["field_mapping"]
+            print(f"\n字段映射: 已加载 ({len(field_mapping)} 个字段)")
             for field_type, field_name in field_mapping.items():
                 print(f"  {field_type}: {field_name}")
+        else:
+            print("\n字段映射: 未找到，请先运行基础数据分析")
     else:
-        print("\n字段映射缓存: 未找到，请先运行基础数据分析")
+        print("\n字段映射: 未找到，请先运行基础数据分析")
 
 
 def show_all_data_sources():
@@ -364,15 +453,20 @@ def validate_data_structure():
     """验证数据结构"""
     print_header("验证数据结构")
     
-    # 检查字段映射缓存
-    if not has_field_mapping_cache():
-        print_error("未找到字段映射缓存")
-        print_info("请先运行基础数据分析来生成字段映射")
+    # 检查数据源配置文件
+    if not check_data_source_dispose_config(CURRENT_DATA_SOURCE):
+        print_error(f"未找到数据源配置文件: {CURRENT_DATA_SOURCE}_dispose.json")
+        print_info("请先运行基础数据分析来生成数据源特定的配置")
         return False
     
-    field_mapping = load_field_mapping_cache()
+    dispose_config = load_data_source_dispose_config(CURRENT_DATA_SOURCE)
+    if not dispose_config:
+        print_error("加载数据源配置失败")
+        return False
+    
+    field_mapping = dispose_config.get("field_mapping")
     if not field_mapping:
-        print_error("字段映射缓存为空")
+        print_error("数据源配置中未找到字段映射")
         return False
     
     # 检查必要字段

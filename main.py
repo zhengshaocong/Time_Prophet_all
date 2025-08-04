@@ -6,13 +6,26 @@
 from utils.config_utils import ensure_directories, validate_config
 from utils.interactive_utils import print_header, print_success, print_error, show_menu, wait_for_key
 from src.analysis.basic_analysis import run_basic_data_analysis
-from src.analysis.purchase_redemption_analysis import run_purchase_redemption_analysis
+from src.analysis.purchase_redemption_analysis import PurchaseRedemptionAnalysis
 from src.prediction.cash_flow_predictor import run_prediction_analysis
 from src.prediction.arima_predictor import run_arima_prediction
 from src.data_processing import run_data_processing
 from utils.config_utils import config_management_menu
 
-# 这个函数现在从模块中导入，不需要重复定义
+def run_purchase_redemption_analysis():
+    """运行申购赎回分析"""
+    print_header("申购赎回分析", "模式分析")
+    
+    # 创建申购赎回分析实例
+    analysis = PurchaseRedemptionAnalysis()
+    
+    # 加载数据
+    if analysis.load_data():
+        # 分析申购赎回模式
+        analysis.analyze_purchase_redemption_patterns()
+        print_success("申购赎回分析完成")
+    else:
+        print_error("数据加载失败")
 
 
 def main():

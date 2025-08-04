@@ -12,7 +12,8 @@ from pathlib import Path
 from config import DATA_DIR, CURRENT_DATA_SOURCE
 from utils.config_utils import (
     get_data_field_mapping, get_field_name, 
-    get_time_format, get_preprocessing_config
+    get_time_format, get_preprocessing_config,
+    check_data_source_dispose_config, get_missing_dispose_config_message
 )
 from utils.interactive_utils import print_success, print_error, print_info, print_warning
 
@@ -72,10 +73,10 @@ class DataProcessor:
     
     def preprocess_data(self, data_source=None):
         """
-        数据预处理
+        预处理数据
         
         Args:
-            data_source: 数据源名称，如果为None则使用当前配置的数据源
+            data_source: 数据源名称，如果为None则自动检测
             
         Returns:
             bool: 是否预处理成功
@@ -85,9 +86,21 @@ class DataProcessor:
             return False
             
         try:
-            # 获取字段映射配置
+            # 获取字段映射配置（会自动检测数据源）
             field_mapping = get_data_field_mapping(data_source)
             preprocessing_config = get_preprocessing_config()
+            
+            # 检查必要的字段是否存在
+            required_fields = ["时间字段", "申购金额字段", "赎回金额字段", "当前余额字段", "昨日余额字段"]
+            missing_fields = []
+            for field_type in required_fields:
+                if field_type not in field_mapping:
+                    missing_fields.append(field_type)
+            
+            if missing_fields:
+                print_error(f"缺少必要的字段映射: {', '.join(missing_fields)}")
+                print_error("请先运行基础数据分析生成数据源配置文件")
+                return False
             
             # 获取字段名
             time_field = field_mapping["时间字段"]
@@ -144,7 +157,10 @@ class DataProcessor:
                             self.data[field] = self.data[field].clip(lower_bound, upper_bound)
             
             print_success("数据预处理完成")
-            print(f"数据源: {data_source or CURRENT_DATA_SOURCE}")
+            # 自动检测数据源名称用于显示
+            dispose_files = list(DATA_DIR.glob("*_dispose.json"))
+            detected_source = dispose_files[0].stem.replace("_dispose", "") if dispose_files else "unknown"
+            print(f"数据源: {data_source or detected_source}")
             print(f"总记录数: {len(self.data)}")
             print(f"有申购记录数: {len(self.data[self.data['Purchase_Amount'] > 0])}")
             print(f"有赎回记录数: {len(self.data[self.data['Redemption_Amount'] > 0])}")

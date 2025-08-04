@@ -7,9 +7,8 @@
 
 import sys
 import argparse
-from main import main, show_main_menu
+from main import main, show_main_menu, run_purchase_redemption_analysis
 from src.analysis.basic_analysis import run_basic_data_analysis
-from src.analysis.purchase_redemption_analysis import run_purchase_redemption_analysis
 from src.prediction.cash_flow_predictor import run_prediction_analysis
 from src.prediction.arima_predictor import run_arima_prediction
 from utils.config_utils import config_management_menu

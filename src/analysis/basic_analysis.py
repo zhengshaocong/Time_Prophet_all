@@ -7,6 +7,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
+import json
+from pathlib import Path
+import pandas as pd
 
 from utils.data_processor import DataProcessor
 from utils.visualization_utils import (
@@ -16,9 +19,8 @@ from utils.visualization_utils import (
 )
 from utils.interactive_utils import print_header, print_success, print_error, print_info
 from utils.file_utils import write_json
-from config import DATA_DIR
-from utils.config_utils import get_field_name
-from utils.data_processing_manager import get_data_for_module, should_process_data
+from config import DATA_DIR, IMAGES_DIR, OUTPUT_DATA_DIR
+from utils.config_utils import get_field_name, get_data_source_dispose_file
 
 class BasicDataAnalysis(DataProcessor):
     """基础数据分析类"""
@@ -27,6 +29,299 @@ class BasicDataAnalysis(DataProcessor):
         """初始化基础数据分析"""
         super().__init__()
         self.module_name = "basic_analysis"
+        self.analysis_data = {}  # 存储分析数据
+        self.analysis_results = {}  # 存储分析结果
+    
+    def load_data_for_analysis(self, data_file=None):
+        """
+        为分析目的加载数据（不进行数据处理）
+        
+        Args:
+            data_file: 数据文件路径，如果为None则自动查找
+            
+        Returns:
+            bool: 是否成功加载数据
+        """
+        if data_file is None:
+            # 自动查找数据文件
+            data_files = list(DATA_DIR.glob("*.csv"))
+            if not data_files:
+                print_error("数据目录中没有找到CSV文件")
+                return False
+            data_file = data_files[0]  # 使用第一个找到的文件
+        
+        try:
+            print_header("数据加载", "读取原始数据")
+            print(f"正在加载数据文件: {data_file}")
+            
+            # 直接读取原始数据，不进行任何处理
+            self.data = pd.read_csv(data_file)
+            self.current_data_file = str(data_file)
+            
+            print_success(f"数据加载成功: {data_file}")
+            print(f"数据形状: {self.data.shape[0]} 行 × {self.data.shape[1]} 列")
+            
+            return True
+            
+        except Exception as e:
+            print_error(f"数据加载失败: {e}")
+            return False
+    
+    def save_analysis_data(self, output_dir=None):
+        """
+        保存分析数据到文件
+        
+        Args:
+            output_dir: 输出目录，默认为output/data
+        """
+        if not self.analysis_data:
+            print_error("没有分析数据可保存")
+            return False
+        
+        if output_dir is None:
+            output_dir = OUTPUT_DATA_DIR
+        
+        # 确保输出目录存在
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            # 保存分析数据为JSON格式
+            analysis_file = output_dir / "basic_analysis_data.json"
+            with open(analysis_file, 'w', encoding='utf-8') as f:
+                json.dump(self.analysis_data, f, ensure_ascii=False, indent=2, default=str)
+            
+            # 保存分析结果统计
+            results_file = output_dir / "basic_analysis_results.json"
+            with open(results_file, 'w', encoding='utf-8') as f:
+                json.dump(self.analysis_results, f, ensure_ascii=False, indent=2, default=str)
+            
+            print_success(f"分析数据已保存: {analysis_file}")
+            print_success(f"分析结果已保存: {results_file}")
+            return True
+            
+        except Exception as e:
+            print_error(f"保存分析数据失败: {e}")
+            return False
+    
+    def generate_detailed_analysis_report(self, output_file=None):
+        """
+        生成详细的数据分析报告
+        
+        Args:
+            output_file: 输出文件路径，默认为原始数据同文件夹下的data_analysis_detailed.md
+        """
+        if not self.data_info:
+            print_error("请先进行数据分析")
+            return False
+        
+        if output_file is None:
+            # 获取当前数据文件名，在同目录下生成报告
+            if hasattr(self, 'current_data_file') and self.current_data_file:
+                data_file_path = Path(self.current_data_file)
+                output_file = data_file_path.parent / "data_analysis_detailed.md"
+            else:
+                output_file = DATA_DIR / "data_analysis_detailed.md"
+        
+        try:
+            # 创建详细的Markdown格式分析报告
+            md_content = f"""# 资金流数据详细分析报告
+
+## 报告信息
+- **生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- **数据文件**: {getattr(self, 'current_data_file', '未知')}
+- **分析模块**: 基础数据分析
+
+## 数据概览
+- **数据形状**: {self.data_info['数据形状'][0]} 行 × {self.data_info['数据形状'][1]} 列
+- **数据大小**: {self.data_info.get('数据大小', '未知')}
+- **内存使用**: {self.data_info.get('内存使用', '未知')}
+- **分析时间**: {self.data_info['分析时间']}
+
+## 数据质量评估
+
+### 完整性分析
+"""
+            
+            # 添加完整性分析
+            if '字段信息' in self.data_info:
+                total_fields = len(self.data_info['字段信息'])
+                complete_fields = 0
+                for field, info in self.data_info['字段信息'].items():
+                    if info.get('空值数量', 0) == 0:
+                        complete_fields += 1
+                
+                completeness_rate = complete_fields / total_fields * 100
+                md_content += f"- **完整字段数**: {complete_fields}/{total_fields} ({completeness_rate:.1f}%)\n"
+                md_content += f"- **数据完整性**: {'优秀' if completeness_rate >= 95 else '良好' if completeness_rate >= 80 else '一般' if completeness_rate >= 60 else '较差'}\n"
+            
+            md_content += "\n### 数据分布特征\n"
+            
+            # 添加数据分布特征
+            if '字段信息' in self.data_info:
+                for field, info in self.data_info['字段信息'].items():
+                    md_content += f"\n#### {field}\n"
+                    md_content += f"- **数据类型**: {info.get('数据类型', '未知')}\n"
+                    md_content += f"- **非空值数量**: {info.get('非空值数量', 0):,}\n"
+                    md_content += f"- **空值数量**: {info.get('空值数量', 0):,}\n"
+                    md_content += f"- **唯一值数量**: {info.get('唯一值数量', 0):,}\n"
+                    
+                    # 数值型字段的统计信息
+                    if info.get('数据类型') in ['int64', 'float64', 'int32', 'float32']:
+                        if '最小值' in info:
+                            md_content += f"- **最小值**: {info['最小值']:,.2f}\n"
+                        if '最大值' in info:
+                            md_content += f"- **最大值**: {info['最大值']:,.2f}\n"
+                        if '平均值' in info:
+                            md_content += f"- **平均值**: {info['平均值']:,.2f}\n"
+                        if '中位数' in info:
+                            md_content += f"- **中位数**: {info['中位数']:,.2f}\n"
+                        if '标准差' in info:
+                            md_content += f"- **标准差**: {info['标准差']:,.2f}\n"
+                    
+                    # 示例值
+                    if '示例值' in info:
+                        md_content += f"- **示例值**: {info['示例值']}\n"
+            
+            # 添加业务字段分析
+            md_content += "\n## 业务字段分析\n"
+            
+            # 分析时间字段
+            time_field = get_field_name("时间字段")
+            if time_field and time_field in self.data_info.get('字段信息', {}):
+                time_info = self.data_info['字段信息'][time_field]
+                md_content += f"\n### 时间字段 ({time_field})\n"
+                if '最小值' in time_info and '最大值' in time_info:
+                    start_date = str(int(time_info['最小值']))
+                    end_date = str(int(time_info['最大值']))
+                    md_content += f"- **时间范围**: {start_date} 至 {end_date}\n"
+                    md_content += f"- **数据天数**: {time_info.get('唯一值数量', 0)} 天\n"
+            
+            # 分析用户字段
+            user_field = get_field_name("用户ID字段")
+            if user_field and user_field in self.data_info.get('字段信息', {}):
+                user_info = self.data_info['字段信息'][user_field]
+                md_content += f"\n### 用户字段 ({user_field})\n"
+                md_content += f"- **用户总数**: {user_info.get('唯一值数量', 0):,}\n"
+                md_content += f"- **平均每用户记录数**: {self.data_info['数据形状'][0] / user_info.get('唯一值数量', 1):.1f}\n"
+            
+            # 分析金额字段
+            amount_fields = ['total_purchase_amt', 'total_redeem_amt', 'tBalance', 'yBalance']
+            md_content += "\n### 金额字段分析\n"
+            for field in amount_fields:
+                if field in self.data_info.get('字段信息', {}):
+                    info = self.data_info['字段信息'][field]
+                    md_content += f"\n#### {field}\n"
+                    if '平均值' in info:
+                        md_content += f"- **平均金额**: {info['平均值']:,.2f}\n"
+                    if '中位数' in info:
+                        md_content += f"- **中位金额**: {info['中位数']:,.2f}\n"
+                    if '最大值' in info:
+                        md_content += f"- **最大金额**: {info['最大值']:,.2f}\n"
+            
+            # 添加数据样本
+            md_content += "\n## 数据样本\n"
+            md_content += "```\n"
+            for record in self.data_info.get('前几行数据', [])[:5]:
+                md_content += str(record) + "\n"
+            md_content += "```\n"
+            
+            # 添加分析建议
+            md_content += "\n## 分析建议\n"
+            md_content += "1. **数据质量**: 建议检查异常值和缺失值\n"
+            md_content += "2. **时间特征**: 建议提取更多时间特征（如星期、月份等）\n"
+            md_content += "3. **用户行为**: 建议分析用户行为模式和趋势\n"
+            md_content += "4. **资金流特征**: 建议分析资金流的周期性和季节性\n"
+            
+            # 保存到文件
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(md_content)
+            
+            print_success(f"详细分析报告已保存: {output_file}")
+            return True
+            
+        except Exception as e:
+            print_error(f"生成详细分析报告失败: {e}")
+            return False
+    
+    def generate_data_source_dispose_config(self, data_source_name=None):
+        """
+        生成数据源特定的dispose配置文件
+        
+        Args:
+            data_source_name: 数据源名称，如果为None则从当前数据文件名推断
+            
+        Returns:
+            bool: 是否成功生成配置文件
+        """
+        if self.data is None:
+            print_error("请先加载数据")
+            return False
+        
+        # 如果没有指定数据源名称，从当前数据文件名推断
+        if data_source_name is None:
+            # 从数据处理器中获取当前数据文件名
+            if hasattr(self, 'current_data_file') and self.current_data_file:
+                data_source_name = Path(self.current_data_file).stem
+            else:
+                # 尝试从数据目录中找到匹配的文件
+                data_files = list(DATA_DIR.glob("*.csv"))
+                if len(data_files) == 1:
+                    data_source_name = data_files[0].stem
+                else:
+                    print_error("无法确定数据源名称，请手动指定")
+                    return False
+        
+        print_header("生成数据源配置文件", f"数据源: {data_source_name}")
+        
+        # 自动检测字段映射
+        field_mapping = self.auto_detect_field_mapping()
+        if not field_mapping:
+            print_error("字段映射检测失败")
+            return False
+        
+        # 构建完整的dispose配置
+        dispose_config = {
+            "data_source_name": data_source_name,
+            "generated_time": datetime.now().isoformat(),
+            "field_mapping": field_mapping,
+            "data_info": {
+                "total_rows": len(self.data),
+                "total_columns": len(self.data.columns),
+                "columns": list(self.data.columns),
+                "data_types": {col: str(dtype) for col, dtype in self.data.dtypes.items()}
+            },
+            "preprocessing_config": {
+                "missing_value_fill": {
+                    "申购金额字段": 0,
+                    "赎回金额字段": 0,
+                    "消费金额字段": 0,
+                    "转账金额字段": 0
+                },
+                "outlier_detection": {
+                    "enabled": True,
+                    "threshold": 3.0,
+                    "method": "clip"
+                }
+            }
+        }
+        
+        # 保存配置文件
+        dispose_file = get_data_source_dispose_file(data_source_name)
+        try:
+            with open(dispose_file, 'w', encoding='utf-8') as f:
+                json.dump(dispose_config, f, ensure_ascii=False, indent=2)
+            
+            print_success(f"数据源配置文件已生成: {dispose_file}")
+            print_info("配置文件包含以下内容:")
+            print_info(f"  - 字段映射: {len(field_mapping)} 个字段")
+            print_info(f"  - 数据信息: {dispose_config['data_info']['total_rows']} 行 × {dispose_config['data_info']['total_columns']} 列")
+            print_info(f"  - 预处理配置: 缺失值处理和异常值检测")
+            
+            return True
+            
+        except Exception as e:
+            print_error(f"保存配置文件失败: {e}")
+            return False
     
     def save_data_analysis(self, output_file=None):
         """
@@ -79,82 +374,141 @@ class BasicDataAnalysis(DataProcessor):
             print_error(f"保存分析报告失败: {e}")
             return False
     
-    def visualize_data(self, save_plot=True):
+    def explore_data(self):
         """
-        基础数据可视化
-        
-        Args:
-            save_plot: 是否保存图片
+        探索数据并保存分析结果
         """
         if self.data is None:
             print_error("请先加载数据")
             return False
+        
+        print_header("数据探索", "分析数据特征")
+        
+        try:
+            # 基础数据信息
+            data_info = {
+                '数据形状': self.data.shape,
+                '数据大小': f"{self.data.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB",
+                '内存使用': f"{self.data.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB",
+                '分析时间': datetime.now().isoformat(),
+                '字段信息': {},
+                '前几行数据': self.data.head().to_dict('records')
+            }
             
-        print_header("基础数据可视化", "生成图表")
-        
-        # 确保数据已预处理
-        if 'Net_Flow' not in self.data.columns:
-            print("数据未预处理，正在自动预处理...")
-            if not self.preprocess_data():
-                print_error("数据预处理失败，无法生成可视化")
-                return False
-        
-        # 设置matplotlib
-        setup_matplotlib()
-        
-        # 创建子图
-        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        fig.suptitle('资金流数据可视化分析', fontsize=16, fontweight='bold')
-        
-        # 1. 时间序列图
-        time_field = get_field_name("时间字段")
-        if time_field in self.data.columns and 'Net_Flow' in self.data.columns:
-            try:
-                # 按日期聚合数据
-                daily_data = self.data.groupby(time_field).agg({
-                    'Net_Flow': 'sum',
-                    'Purchase_Amount': 'sum',
-                    'Redemption_Amount': 'sum'
-                }).reset_index()
+            # 分析每个字段
+            for column in self.data.columns:
+                field_info = {
+                    '数据类型': str(self.data[column].dtype),
+                    '非空值数量': int(self.data[column].count()),
+                    '空值数量': int(self.data[column].isnull().sum()),
+                    '唯一值数量': int(self.data[column].nunique()),
+                    '示例值': str(self.data[column].iloc[0]) if len(self.data) > 0 else 'N/A'
+                }
                 
-                # 使用工具函数创建时间序列图
-                create_time_series_plot(
-                    daily_data, time_field,
-                    ['Net_Flow', 'Purchase_Amount', 'Redemption_Amount'],
-                    ['净资金流', '申购金额', '赎回金额'],
-                    ['blue', 'green', 'red'],
-                    '资金流时间序列',
-                    axes[0, 0]
-                )
-            except Exception as e:
-                print(f"时间序列图生成失败: {e}")
+                # 数值型字段的统计信息
+                if self.data[column].dtype in ['int64', 'float64', 'int32', 'float32']:
+                    field_info.update({
+                        '最小值': float(self.data[column].min()),
+                        '最大值': float(self.data[column].max()),
+                        '平均值': float(self.data[column].mean()),
+                        '中位数': float(self.data[column].median()),
+                        '标准差': float(self.data[column].std())
+                    })
+                
+                data_info['字段信息'][column] = field_info
+            
+            self.data_info = data_info
+            
+            # 保存分析数据
+            self.analysis_data = {
+                'basic_stats': {
+                    'total_rows': len(self.data),
+                    'total_columns': len(self.data.columns),
+                    'memory_usage': self.data.memory_usage(deep=True).sum(),
+                    'missing_values': self.data.isnull().sum().to_dict(),
+                    'data_types': {col: str(dtype) for col, dtype in self.data.dtypes.items()}
+                },
+                'field_analysis': data_info['字段信息'],
+                'sample_data': self.data.head(10).to_dict('records')
+            }
+            
+            # 保存分析结果
+            self.analysis_results = {
+                'analysis_time': datetime.now().isoformat(),
+                'data_quality_score': self._calculate_data_quality_score(),
+                'key_insights': self._generate_key_insights()
+            }
+            
+            print_success("数据探索完成")
+            return True
+            
+        except Exception as e:
+            print_error(f"数据探索失败: {e}")
+            return False
+    
+    def _calculate_data_quality_score(self):
+        """
+        计算数据质量评分
         
-        # 2. 资金流分布直方图
-        if 'Net_Flow' in self.data.columns:
-            create_histogram(
-                self.data, 'Net_Flow', bins=30, 
-                color='skyblue', title='净资金流分布',
-                ax=axes[0, 1]
-            )
+        Returns:
+            float: 数据质量评分 (0-100)
+        """
+        if self.data is None:
+            return 0
         
-        # 3. 余额变化分布图
-        if 'Balance_Change' in self.data.columns:
-            create_balance_change_plot(self.data, ax=axes[1, 0])
+        total_cells = len(self.data) * len(self.data.columns)
+        missing_cells = self.data.isnull().sum().sum()
+        completeness = (total_cells - missing_cells) / total_cells * 100
         
-        # 4. 月度资金流分布图
-        if 'Month' in self.data.columns and 'Net_Flow' in self.data.columns:
-            create_monthly_comparison_plot(self.data, ax=axes[1, 1])
+        # 检查数据类型一致性
+        type_consistency = 100
+        for column in self.data.columns:
+            if self.data[column].dtype == 'object':
+                # 检查是否应该转换为数值类型
+                try:
+                    pd.to_numeric(self.data[column], errors='raise')
+                    type_consistency -= 10  # 可以转换但未转换
+                except:
+                    pass
         
-        plt.tight_layout()
+        return min(100, max(0, (completeness + type_consistency) / 2))
+    
+    def _generate_key_insights(self):
+        """
+        生成关键洞察
         
-        if save_plot:
-            # 使用完整的函数名避免冲突
-            from utils.visualization_utils import save_plot as save_plot_func
-            save_plot_func(fig, "cash_flow_analysis.png")
+        Returns:
+            list: 关键洞察列表
+        """
+        insights = []
         
-        # 关闭图形以释放内存
-        close_plot(fig)
-        return True
+        if self.data is None:
+            return insights
+        
+        # 数据量洞察
+        total_rows = len(self.data)
+        if total_rows > 1000000:
+            insights.append("数据量很大，建议使用采样或分批处理")
+        elif total_rows < 1000:
+            insights.append("数据量较小，可能影响分析结果的可靠性")
+        
+        # 缺失值洞察
+        missing_ratio = self.data.isnull().sum().sum() / (len(self.data) * len(self.data.columns))
+        if missing_ratio > 0.1:
+            insights.append("数据缺失值较多，需要重点关注数据质量")
+        elif missing_ratio < 0.01:
+            insights.append("数据完整性很好")
+        
+        # 时间字段洞察
+        time_field = get_field_name("时间字段")
+        if time_field and time_field in self.data.columns:
+            unique_dates = self.data[time_field].nunique()
+            if unique_dates > 365:
+                insights.append("数据时间跨度超过一年，适合进行长期趋势分析")
+            elif unique_dates < 30:
+                insights.append("数据时间跨度较短，建议收集更多历史数据")
+        
+        return insights
     
     def auto_detect_field_mapping(self):
         """
@@ -262,41 +616,45 @@ def run_basic_data_analysis():
     # 创建基础数据分析实例
     analysis = BasicDataAnalysis()
     
-    # 检查数据处理配置
-    if should_process_data(analysis.module_name):
-        print_info("检测到数据处理配置，将使用处理后的数据进行分析")
-    else:
-        print_info("使用原始数据进行基础分析")
-    
-    # 1.1 读取数据的前五行并解析字段
-    print("\n=== 步骤 1.1: 数据加载和字段解析 ===")
-    if analysis.load_data(use_data_processing=True, module_name=analysis.module_name):
-        analysis.analyze_data_structure(top_rows=5)
-        analysis.save_data_analysis()
+    # 1.1 读取原始数据（不进行数据处理）
+    print("\n=== 步骤 1.1: 数据加载 ===")
+    if analysis.load_data_for_analysis():
+        print_success("数据加载成功")
         
-        # 1.1.1 自动检测字段映射并生成缓存
-        print("\n=== 步骤 1.1.1: 字段映射自动检测 ===")
-        field_mapping = analysis.auto_detect_field_mapping()
-        if field_mapping:
-            from utils.cache_utils import save_field_mapping_cache
-            if save_field_mapping_cache(field_mapping):
-                print_success("字段映射缓存生成成功")
+        # 1.2 基础数据探索
+        print("\n=== 步骤 1.2: 基础数据探索 ===")
+        if analysis.explore_data():
+            print_success("数据探索完成")
+            
+            # 1.3 保存分析数据
+            print("\n=== 步骤 1.3: 保存分析数据 ===")
+            if analysis.save_analysis_data():
+                print_success("分析数据保存完成")
+            
+            # 1.4 保存分析结果
+            print("\n=== 步骤 1.4: 保存分析结果 ===")
+            if analysis.save_data_analysis():
+                print_success("分析结果保存完成")
+            
+            # 1.5 生成详细分析报告
+            print("\n=== 步骤 1.5: 生成详细分析报告 ===")
+            if analysis.generate_detailed_analysis_report():
+                print_success("详细分析报告生成完成")
+            
+            # 1.6 生成数据源dispose配置文件
+            print("\n=== 步骤 1.6: 生成数据源配置文件 ===")
+            if analysis.generate_data_source_dispose_config():
+                print_success("数据源配置文件生成完成")
             else:
-                print_error("字段映射缓存生成失败")
+                print_error("数据源配置文件生成失败")
+        else:
+            print_error("数据探索失败")
+    else:
+        print_error("数据加载失败")
+        return False
     
-    # 1.2 读取数据并展示成图片
-    print("\n=== 步骤 1.2: 基础数据可视化 ===")
-    analysis.visualize_data(save_plot=True)
-    
-    # 显示数据摘要
-    print("\n=== 数据摘要 ===")
-    summary = analysis.get_data_summary()
-    if summary:
-        print(f"数据形状: {summary['数据形状']}")
-        print(f"字段数量: {len(summary['字段列表'])}")
-        print(f"字段列表: {', '.join(summary['字段列表'])}")
-    
-    print_success("基础数据分析完成")
+    print_success("基础数据分析完成！")
+    return True
 
 if __name__ == "__main__":
     run_basic_data_analysis() 
