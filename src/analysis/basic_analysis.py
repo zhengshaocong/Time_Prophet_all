@@ -19,7 +19,7 @@ from utils.visualization_utils import (
 )
 from utils.interactive_utils import print_header, print_success, print_error, print_info
 from utils.file_utils import write_json
-from config import DATA_DIR, IMAGES_DIR, OUTPUT_DATA_DIR
+from config import DATA_DIR, IMAGES_DIR, OUTPUT_DATA_DIR, BASIC_ANALYSIS_CONFIG
 from utils.config_utils import get_field_name, get_data_source_dispose_file
 
 class BasicDataAnalysis(DataProcessor):
@@ -31,6 +31,10 @@ class BasicDataAnalysis(DataProcessor):
         self.module_name = "basic_analysis"
         self.analysis_data = {}  # 存储分析数据
         self.analysis_results = {}  # 存储分析结果
+        
+        # 加载配置
+        self.config = BASIC_ANALYSIS_CONFIG
+        print_info(f"加载基础数据分析配置: {self.config.get('数据处理', {}).get('处理模式', 'auto')} 模式")
     
     def load_data_for_analysis(self, data_file=None):
         """
@@ -395,6 +399,16 @@ class BasicDataAnalysis(DataProcessor):
                 '前几行数据': self.data.head().to_dict('records')
             }
             
+            # 根据配置进行数据质量检查
+            if self.config.get('数据处理', {}).get('数据质量检查', True):
+                print_info("执行数据质量检查...")
+                data_info['数据质量检查'] = self._perform_data_quality_check()
+            
+            # 根据配置进行数据完整性检查
+            if self.config.get('数据处理', {}).get('数据完整性检查', True):
+                print_info("执行数据完整性检查...")
+                data_info['数据完整性检查'] = self._perform_data_integrity_check()
+            
             # 分析每个字段
             for column in self.data.columns:
                 field_info = {
@@ -429,7 +443,9 @@ class BasicDataAnalysis(DataProcessor):
                     'data_types': {col: str(dtype) for col, dtype in self.data.dtypes.items()}
                 },
                 'field_analysis': data_info['字段信息'],
-                'sample_data': self.data.head(10).to_dict('records')
+                'sample_data': self.data.head(10).to_dict('records'),
+                'data_quality_check': data_info.get('数据质量检查', {}),
+                'data_integrity_check': data_info.get('数据完整性检查', {})
             }
             
             # 保存分析结果
@@ -509,6 +525,77 @@ class BasicDataAnalysis(DataProcessor):
                 insights.append("数据时间跨度较短，建议收集更多历史数据")
         
         return insights
+    
+    def _perform_data_quality_check(self):
+        """
+        执行数据质量检查
+        
+        Returns:
+            dict: 数据质量检查结果
+        """
+        quality_report = {
+            '检查时间': datetime.now().isoformat(),
+            '检查项目': {}
+        }
+        
+        # 检查缺失值
+        missing_data = self.data.isnull().sum()
+        quality_report['检查项目']['缺失值检查'] = {
+            '总缺失值数量': int(missing_data.sum()),
+            '缺失值比例': float(missing_data.sum() / (len(self.data) * len(self.data.columns))),
+            '各字段缺失值': missing_data.to_dict()
+        }
+        
+        # 检查重复值
+        duplicate_rows = self.data.duplicated().sum()
+        quality_report['检查项目']['重复值检查'] = {
+            '重复行数量': int(duplicate_rows),
+            '重复行比例': float(duplicate_rows / len(self.data))
+        }
+        
+        # 检查数据类型
+        data_types = self.data.dtypes.to_dict()
+        quality_report['检查项目']['数据类型检查'] = {
+            '数据类型分布': {str(dtype): list(data_types.values()).count(dtype) for dtype in set(data_types.values())}
+        }
+        
+        return quality_report
+    
+    def _perform_data_integrity_check(self):
+        """
+        执行数据完整性检查
+        
+        Returns:
+            dict: 数据完整性检查结果
+        """
+        integrity_report = {
+            '检查时间': datetime.now().isoformat(),
+            '检查项目': {}
+        }
+        
+        # 检查关键字段的完整性
+        key_fields = ['user_id', 'report_date', 'tBalance', 'yBalance']
+        for field in key_fields:
+            if field in self.data.columns:
+                field_data = self.data[field]
+                integrity_report['检查项目'][f'{field}_完整性'] = {
+                    '非空值数量': int(field_data.count()),
+                    '空值数量': int(field_data.isnull().sum()),
+                    '完整性比例': float(field_data.count() / len(field_data)),
+                    '唯一值数量': int(field_data.nunique())
+                }
+        
+        # 检查数据一致性
+        if 'tBalance' in self.data.columns and 'yBalance' in self.data.columns:
+            # 检查余额字段的逻辑一致性
+            balance_consistency = (self.data['tBalance'] >= 0).sum()
+            integrity_report['检查项目']['余额一致性'] = {
+                '非负余额记录数': int(balance_consistency),
+                '负余额记录数': int(len(self.data) - balance_consistency),
+                '一致性比例': float(balance_consistency / len(self.data))
+            }
+        
+        return integrity_report
     
     def auto_detect_field_mapping(self):
         """
@@ -607,6 +694,181 @@ class BasicDataAnalysis(DataProcessor):
         
         return field_mapping
 
+    def visualize_data(self, save_plot=True):
+        """
+        基础数据可视化（使用原始数据）
+        
+        Args:
+            save_plot: 是否保存图片
+        """
+        if self.data is None:
+            print_error("请先加载数据")
+            return False
+            
+        print_header("基础数据可视化", "生成图表")
+        
+        # 设置matplotlib
+        setup_matplotlib()
+        
+        # 创建子图
+        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+        fig.suptitle('资金流数据可视化分析', fontsize=16, fontweight='bold')
+        
+        try:
+            # 1. 时间序列图 - 使用原始字段
+            time_field = get_field_name("时间字段")
+            purchase_field = get_field_name("申购金额字段")
+            redeem_field = get_field_name("赎回金额字段")
+            
+            if time_field and purchase_field and redeem_field:
+                # 按日期聚合数据
+                daily_data = self.data.groupby(time_field).agg({
+                    purchase_field: 'sum',
+                    redeem_field: 'sum'
+                }).reset_index()
+                
+                # 转换时间格式为可读的日期
+                try:
+                    # 假设时间字段是YYYYMMDD格式
+                    daily_data['date_readable'] = pd.to_datetime(daily_data[time_field], format='%Y%m%d')
+                    x_data = daily_data['date_readable']
+                except:
+                    # 如果转换失败，使用原始数据
+                    x_data = daily_data[time_field]
+                
+                # 创建时间序列图
+                axes[0, 0].plot(x_data, daily_data[purchase_field], 
+                               label='申购金额', color='green', linewidth=1, alpha=0.8)
+                axes[0, 0].plot(x_data, daily_data[redeem_field], 
+                               label='赎回金额', color='red', linewidth=1, alpha=0.8)
+                axes[0, 0].set_title('资金流时间序列')
+                axes[0, 0].set_xlabel('日期')
+                axes[0, 0].set_ylabel('金额')
+                axes[0, 0].legend()
+                axes[0, 0].grid(True, alpha=0.3)
+                
+                # 格式化x轴日期
+                if 'date_readable' in daily_data.columns:
+                    axes[0, 0].tick_params(axis='x', rotation=45)
+            else:
+                axes[0, 0].text(0.5, 0.5, '缺少时间或金额字段', 
+                               ha='center', va='center', transform=axes[0, 0].transAxes)
+                axes[0, 0].set_title('资金流时间序列')
+            
+            # 2. 申购金额分布直方图
+            if purchase_field:
+                purchase_data = self.data[purchase_field]
+                # 过滤掉0值，只显示有申购的记录
+                non_zero_purchase = purchase_data[purchase_data > 0]
+                if len(non_zero_purchase) > 0:
+                    # 使用对数刻度来更好地显示分布
+                    axes[0, 1].hist(non_zero_purchase, bins=50, color='skyblue', alpha=0.7, edgecolor='black')
+                    axes[0, 1].set_title('申购金额分布（非零值）')
+                    axes[0, 1].set_xlabel('申购金额')
+                    axes[0, 1].set_ylabel('频次')
+                    axes[0, 1].grid(True, alpha=0.3)
+                    
+                    # 添加统计信息
+                    mean_val = non_zero_purchase.mean()
+                    median_val = non_zero_purchase.median()
+                    axes[0, 1].axvline(mean_val, color='red', linestyle='--', alpha=0.8, label=f'均值: {mean_val:,.0f}')
+                    axes[0, 1].axvline(median_val, color='orange', linestyle='--', alpha=0.8, label=f'中位数: {median_val:,.0f}')
+                    axes[0, 1].legend()
+                else:
+                    axes[0, 1].text(0.5, 0.5, '无申购数据', 
+                                   ha='center', va='center', transform=axes[0, 1].transAxes)
+                    axes[0, 1].set_title('申购金额分布')
+            else:
+                axes[0, 1].text(0.5, 0.5, '缺少申购字段', 
+                               ha='center', va='center', transform=axes[0, 1].transAxes)
+                axes[0, 1].set_title('申购金额分布')
+            
+            # 3. 余额分布图
+            balance_field = get_field_name("当前余额字段")
+            if balance_field:
+                balance_data = self.data[balance_field]
+                # 过滤掉0值，只显示有余额的记录
+                non_zero_balance = balance_data[balance_data > 0]
+                if len(non_zero_balance) > 0:
+                    axes[1, 0].hist(non_zero_balance, bins=50, color='lightgreen', alpha=0.7, edgecolor='black')
+                    axes[1, 0].set_title('当前余额分布（非零值）')
+                    axes[1, 0].set_xlabel('余额')
+                    axes[1, 0].set_ylabel('频次')
+                    axes[1, 0].grid(True, alpha=0.3)
+                    
+                    # 添加统计信息
+                    mean_val = non_zero_balance.mean()
+                    median_val = non_zero_balance.median()
+                    axes[1, 0].axvline(mean_val, color='red', linestyle='--', alpha=0.8, label=f'均值: {mean_val:,.0f}')
+                    axes[1, 0].axvline(median_val, color='orange', linestyle='--', alpha=0.8, label=f'中位数: {median_val:,.0f}')
+                    axes[1, 0].legend()
+                else:
+                    axes[1, 0].text(0.5, 0.5, '无余额数据', 
+                                   ha='center', va='center', transform=axes[1, 0].transAxes)
+                    axes[1, 0].set_title('当前余额分布')
+            else:
+                axes[1, 0].text(0.5, 0.5, '缺少余额字段', 
+                               ha='center', va='center', transform=axes[1, 0].transAxes)
+                axes[1, 0].set_title('当前余额分布')
+            
+            # 4. 用户活跃度分析
+            user_field = get_field_name("用户ID字段")
+            if user_field:
+                # 统计每个用户的记录数
+                user_activity = self.data[user_field].value_counts()
+                # 取前20个最活跃用户
+                top_users = user_activity.head(20)
+                
+                # 创建用户标签
+                user_labels = [f'用户{i+1}' for i in range(len(top_users))]
+                
+                # 绘制柱状图
+                bars = axes[1, 1].bar(range(len(top_users)), top_users.values, color='orange', alpha=0.7)
+                axes[1, 1].set_title('用户活跃度（前20名）')
+                axes[1, 1].set_xlabel('用户排名')
+                axes[1, 1].set_ylabel('记录数')
+                axes[1, 1].grid(True, alpha=0.3)
+                
+                # 设置x轴标签
+                axes[1, 1].set_xticks(range(len(top_users)))
+                axes[1, 1].set_xticklabels(user_labels, rotation=45)
+                
+                # 在柱子上添加数值标签
+                for i, bar in enumerate(bars):
+                    height = bar.get_height()
+                    axes[1, 1].text(bar.get_x() + bar.get_width()/2., height,
+                                   f'{int(height)}', ha='center', va='bottom', fontsize=8)
+                
+                # 添加统计信息
+                mean_activity = top_users.mean()
+                axes[1, 1].axhline(mean_activity, color='red', linestyle='--', alpha=0.8, 
+                                  label=f'平均活跃度: {mean_activity:.0f}')
+                axes[1, 1].legend()
+            else:
+                axes[1, 1].text(0.5, 0.5, '缺少用户字段', 
+                               ha='center', va='center', transform=axes[1, 1].transAxes)
+                axes[1, 1].set_title('用户活跃度分析')
+            
+            plt.tight_layout()
+            
+            if save_plot:
+                # 确保图片保存目录存在
+                IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+                
+                # 保存图片
+                plot_file = IMAGES_DIR / "basic_data_analysis.png"
+                plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+                print_success(f"分析图表已保存: {plot_file}")
+            
+            # 关闭图形以释放内存
+            close_plot(fig)
+            return True
+            
+        except Exception as e:
+            print_error(f"数据可视化失败: {e}")
+            close_plot(fig)
+            return False
+
 def run_basic_data_analysis():
     """
     运行基础数据分析功能
@@ -647,6 +909,13 @@ def run_basic_data_analysis():
                 print_success("数据源配置文件生成完成")
             else:
                 print_error("数据源配置文件生成失败")
+            
+            # 1.7 数据可视化
+            print("\n=== 步骤 1.7: 数据可视化 ===")
+            if analysis.visualize_data(save_plot=True):
+                print_success("数据可视化完成")
+            else:
+                print_error("数据可视化失败")
         else:
             print_error("数据探索失败")
     else:
