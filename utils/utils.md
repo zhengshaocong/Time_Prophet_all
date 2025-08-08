@@ -15,7 +15,8 @@ utils/
 ├── cache_utils.py                 # 缓存管理工具
 ├── config_utils.py                # 配置管理工具
 ├── visualization_utils.py         # 可视化工具
-└── interactive_utils.py           # 交互式界面工具
+├── interactive_utils.py           # 交互式界面工具
+└── autocorrelation_utils.py       # 自相关分析工具
 ```
 
 ## 功能说明
@@ -69,6 +70,14 @@ utils/
 - 表格显示和格式化
 - 确认对话框
 
+### autocorrelation_utils.py
+- 数值化自相关分析
+- ACF和PACF计算
+- Ljung-Box检验
+- 基于ACF/PACF的ARIMA参数确定
+- 残差自相关检验
+- 综合自相关分析
+
 ## 使用示例
 
 ### 基础工具使用
@@ -77,6 +86,7 @@ from utils.file_utils import read_json, write_csv
 from utils.data_utils import clean_data, validate_data
 from utils.config_utils import get_data_field_mapping, get_field_name
 from utils.cache_utils import save_field_mapping_cache, load_field_mapping_cache
+from utils.autocorrelation_utils import quick_autocorrelation_check, analyze_residuals
 ```
 
 ### 数据处理管理器使用
@@ -94,6 +104,28 @@ processed_data = get_data_for_module("cash_flow_prediction")
 
 # 获取处理后数据路径
 data_path = get_processed_data_path("arima_prediction")
+
+### 自相关分析工具使用
+```python
+from utils.autocorrelation_utils import AutocorrelationAnalyzer, quick_autocorrelation_check
+
+# 快速自相关检查
+result = quick_autocorrelation_check(time_series)
+if result:
+    print(f"建议的ARIMA模型: {result['summary']['suggested_model']}")
+
+# 详细自相关分析
+analyzer = AutocorrelationAnalyzer()
+analysis = analyzer.comprehensive_analysis(time_series)
+if analysis:
+    print(f"序列是否平稳: {analysis['summary']['is_stationary']}")
+    print(f"建议参数: p={analysis['arima_params']['suggested_p']}, q={analysis['arima_params']['suggested_q']}")
+
+# 残差分析
+residual_analysis = analyzer.residual_analysis(model.resid)
+if residual_analysis:
+    print(f"残差质量: {residual_analysis['quality_assessment']['overall_quality']}")
+```
 ```
 
 ### 交互式界面使用

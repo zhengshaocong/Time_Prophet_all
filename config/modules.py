@@ -18,8 +18,8 @@ BASIC_ANALYSIS_CONFIG = {
     }
 }
 
-# 申购赎回分析模块配置
-PURCHASE_REDEMPTION_CONFIG = {
+# 数据预处理模块配置
+DATA_PREPROCESSING_CONFIG = {
     "数据处理": {
         "启用数据处理": True,       # 是否启用数据处理
         "处理模式": "auto",         # 处理模式: auto(自动), manual(手动), skip(跳过)
@@ -38,8 +38,8 @@ PURCHASE_REDEMPTION_CONFIG = {
     }
 }
 
-# 资金流预测模块配置
-CASH_FLOW_PREDICTION_CONFIG = {
+# ARIMA预测模块配置
+ARIMA_PREDICTION_CONFIG = {
     "数据处理": {
         "启用数据处理": True,       # 是否启用数据处理
         "处理模式": "auto",         # 处理模式: auto(自动), manual(手动), skip(跳过)

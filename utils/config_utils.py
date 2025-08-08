@@ -92,15 +92,40 @@ def get_data_field_mapping(data_source=None):
     """
     # 如果没有指定数据源，尝试自动检测
     if data_source is None:
-        # 查找data目录中的dispose配置文件
-        dispose_files = list(DATA_DIR.glob("*_dispose.json"))
-        if dispose_files:
-            # 使用第一个找到的配置文件
-            data_source = dispose_files[0].stem.replace("_dispose", "")
+        # 首先尝试查找特化配置文件，排除template目录
+        config_dirs = [d for d in DATA_DIR.iterdir() if d.is_dir() and (d / "config.json").exists() and d.name != "template"]
+        if config_dirs:
+            # 优先选择user_balance_table，如果存在的话
+            user_balance_dir = DATA_DIR / "user_balance_table"
+            if user_balance_dir.exists() and (user_balance_dir / "config.json").exists():
+                data_source = "user_balance_table"
+            else:
+                # 使用第一个找到的配置文件
+                data_source = config_dirs[0].name
             print(f"自动检测到数据源: {data_source}")
+        else:
+            # 查找data目录中的dispose配置文件（向后兼容）
+            dispose_files = list(DATA_DIR.glob("*_dispose.json"))
+            if dispose_files:
+                # 使用第一个找到的配置文件
+                data_source = dispose_files[0].stem.replace("_dispose", "")
+                print(f"自动检测到数据源: {data_source}")
     
-    # 尝试从数据源特定的dispose文件读取
+    # 尝试从数据源特定的配置文件读取
     if data_source:
+        # 首先尝试读取特化配置文件
+        config_file = DATA_DIR / data_source / "config.json"
+        if config_file.exists():
+            try:
+                import json
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                if "field_mapping" in config:
+                    return config["field_mapping"]
+            except Exception as e:
+                print_warning(f"读取特化配置文件失败: {e}")
+        
+        # 如果特化配置文件不存在，尝试dispose配置文件（向后兼容）
         dispose_config = load_data_source_dispose_config(data_source)
         if dispose_config and "field_mapping" in dispose_config:
             return dispose_config["field_mapping"]

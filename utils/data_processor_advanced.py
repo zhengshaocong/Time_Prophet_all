@@ -12,7 +12,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from config import DATA_PROCESSING_CONFIG, OUTPUT_DATA_DIR
-from utils.interactive_utils import print_header, print_success, print_error, print_info
+from utils.interactive_utils import print_header, print_success, print_error, print_info, print_warning
 from utils.file_utils import write_csv, write_json
 
 
@@ -316,20 +316,31 @@ class AdvancedDataProcessor:
             pd.DataFrame: 聚合后的数据
         """
         if not self.config["数据聚合"]["启用聚合"]:
+            print_info("跳过数据聚合 (聚合功能未启用)")
+            print(f"  ⏭️  聚合功能已禁用，保持原始数据量: {len(data):,} 条")
             return data
         
+        print_info("开始执行数据聚合...")
         agg_config = self.config["数据聚合"]
         time_field = agg_config["时间字段"]
         agg_way = agg_config["聚合方式"]
         agg_func = agg_config["聚合函数"]
         
+        print(f"  🔄 聚合功能已启用")
+        print(f"  📅 聚合方式: {agg_way}")
+        print(f"  🧮 聚合函数: {agg_func}")
+        print(f"  🕒 时间字段: {time_field}")
+        
         if time_field not in data.columns:
             print_error(f"时间字段 '{time_field}' 不存在")
+            print(f"  ❌ 聚合失败: 时间字段 '{time_field}' 不存在")
+            print(f"  💡 建议: 检查时间字段名称是否正确，或使用 'auto' 自动检测")
             return data
         
         try:
             # 确保时间字段是datetime类型
             data[time_field] = pd.to_datetime(data[time_field])
+            print(f"  🔄 已转换时间字段 '{time_field}' 为datetime类型")
             
             # 设置时间索引
             data = data.set_index(time_field)
@@ -342,12 +353,23 @@ class AdvancedDataProcessor:
             elif agg_way == "monthly":
                 freq = "M"
             else:
+                print_warning(f"不支持的聚合方式: {agg_way}")
+                print(f"  ❌ 聚合失败: 不支持的聚合方式 '{agg_way}'")
+                print(f"  💡 支持的聚合方式: daily, weekly, monthly")
                 return data
             
             # 数值列
             numeric_columns = data.select_dtypes(include=[np.number]).columns
+            print(f"  🔍 检测到 {len(numeric_columns)} 个数值字段用于聚合")
+            
+            if len(numeric_columns) == 0:
+                print_warning("没有找到可聚合的数值列")
+                print(f"  ❌ 聚合失败: 没有找到可聚合的数值列")
+                print(f"  💡 建议: 检查数据中是否包含数值字段")
+                return data
             
             # 聚合
+            print(f"  🚀 开始执行聚合操作...")
             if agg_func == "sum":
                 aggregated = data[numeric_columns].resample(freq).sum()
             elif agg_func == "mean":
@@ -359,17 +381,28 @@ class AdvancedDataProcessor:
             elif agg_func == "min":
                 aggregated = data[numeric_columns].resample(freq).min()
             else:
-                return data
+                print_warning(f"不支持的聚合函数: {agg_func}，使用sum")
+                aggregated = data[numeric_columns].resample(freq).sum()
             
             # 重置索引
             aggregated = aggregated.reset_index()
+            print(f"  🔄 已重置时间索引")
             
             print_info(f"数据聚合: {len(data):,} -> {len(aggregated):,} 条")
             print(f"聚合方式: {agg_way}, 聚合函数: {agg_func}")
             
+            # 添加聚合结果提示
+            if len(aggregated) != len(data):
+                print(f"  ✅ 聚合完成: {len(data):,} -> {len(aggregated):,} 条 (减少 {((len(data) - len(aggregated)) / len(data) * 100):.1f}%)")
+            else:
+                print(f"  ⚠️  聚合未生效: 数据量未变化 ({len(data):,} -> {len(aggregated):,} 条)")
+            
+            print(f"  ✅ 聚合操作完成!")
             return aggregated
         except Exception as e:
             print_error(f"数据聚合失败: {e}")
+            print(f"  ❌ 聚合过程中发生错误: {e}")
+            print(f"  💡 建议: 检查数据格式、时间字段格式、聚合配置等")
             return data
     
     def process_data(self, file_path=None, data=None):
@@ -452,11 +485,30 @@ class AdvancedDataProcessor:
         
         # 6. 数据聚合
         if self.config["数据聚合"]["启用聚合"]:
+            print_info("执行数据聚合...")
+            print(f"  🔄 聚合功能已启用")
+            print(f"  📅 聚合方式: {self.config['数据聚合']['聚合方式']}")
+            print(f"  🧮 聚合函数: {self.config['数据聚合']['聚合函数']}")
+            print(f"  🕒 时间字段: {self.config['数据聚合']['时间字段']}")
+            
+            original_count_before_aggregate = len(data)
             data = self.aggregate_data(data)
+            
+            # 聚合后的提示
+            if len(data) != original_count_before_aggregate:
+                print(f"  ✅ 聚合完成: {original_count_before_aggregate:,} -> {len(data):,} 条 (减少 {((original_count_before_aggregate - len(data)) / original_count_before_aggregate * 100):.1f}%)")
+            else:
+                print(f"  ⚠️  聚合未生效: 数据量未变化 ({original_count_before_aggregate:,} -> {len(data):,} 条)")
+            
             self.processing_stats["处理步骤"].append({
                 "步骤": "数据聚合",
-                "数据量": len(data)
+                "数据量": len(data),
+                "聚合方式": self.config["数据聚合"]["聚合方式"],
+                "聚合函数": self.config["数据聚合"]["聚合函数"]
             })
+        else:
+            print_info("跳过数据聚合 (聚合功能未启用)")
+            print(f"  ⏭️  聚合功能已禁用，保持原始数据量: {len(data):,} 条")
         
         # 保存处理后的数据
         if self.config["输出配置"]["保存处理后的数据"]:

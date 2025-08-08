@@ -24,8 +24,28 @@ def write_json(data: Dict[str, Any], file_path: Union[str, Path], indent: int = 
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     
+    # 处理numpy数据类型
+    def convert_numpy_types(obj):
+        """递归转换numpy数据类型为Python原生类型"""
+        import numpy as np
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {key: convert_numpy_types(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_numpy_types(item) for item in obj]
+        else:
+            return obj
+    
+    # 转换数据类型
+    converted_data = convert_numpy_types(data)
+    
     with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=indent)
+        json.dump(converted_data, f, ensure_ascii=False, indent=indent)
 
 def read_csv(file_path: Union[str, Path]) -> List[Dict[str, str]]:
     """读取CSV文件"""

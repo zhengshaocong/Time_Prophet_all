@@ -12,9 +12,8 @@ import pandas as pd
 
 from config import (
     GLOBAL_DATA_PROCESSING_CONFIG, DATA_DIR, OUTPUT_DATA_DIR, CACHE_DIR,
-    BASIC_ANALYSIS_CONFIG, PURCHASE_REDEMPTION_CONFIG, 
-    CASH_FLOW_PREDICTION_CONFIG, MODEL_EVALUATION_CONFIG,
-    ARIMA_TRAINING_CONFIG
+    BASIC_ANALYSIS_CONFIG, MODULE_DATA_PREPROCESSING_CONFIG, 
+    ARIMA_PREDICTION_CONFIG, ARIMA_TRAINING_CONFIG
 )
 from utils.interactive_utils import print_info, print_success, print_warning, print_error
 from src.data_processing import DataProcessingPipeline
@@ -61,10 +60,8 @@ class DataProcessingManager:
         """
         config_map = {
             "basic_analysis": BASIC_ANALYSIS_CONFIG,
-            "purchase_redemption": PURCHASE_REDEMPTION_CONFIG,
-            "cash_flow_prediction": CASH_FLOW_PREDICTION_CONFIG,
-            "model_evaluation": MODEL_EVALUATION_CONFIG,
-            "arima_prediction": ARIMA_TRAINING_CONFIG
+            "data_preprocessing": MODULE_DATA_PREPROCESSING_CONFIG,
+            "arima_prediction": ARIMA_PREDICTION_CONFIG
         }
         
         return config_map.get(module_name, {})
@@ -244,25 +241,11 @@ class DataProcessingManager:
             self.pipeline.feature_config["用户特征"]["启用"] = False
             self.pipeline.feature_config["业务特征"]["启用"] = False
         
-        elif module_name == "purchase_redemption":
-            # 申购赎回分析需要时间特征和基础特征
-            self.pipeline.feature_config["统计特征"]["启用"] = False
-            self.pipeline.feature_config["用户特征"]["启用"] = False
-        
         elif module_name == "arima_prediction":
             # ARIMA预测需要时间序列特征
             self.pipeline.feature_config["用户特征"]["启用"] = False
             self.pipeline.feature_config["业务特征"]["启用"] = False
             self.pipeline.transformation_config["时间序列特征"]["启用"] = True
-        
-        elif module_name == "cash_flow_prediction":
-            # 资金流预测需要所有特征
-            pass  # 使用默认配置
-        
-        elif module_name == "model_evaluation":
-            # 模型评估需要高质量的数据
-            self.pipeline.transformation_config["特征选择"]["缺失值阈值"] = 0.1
-            self.pipeline.transformation_config["特征选择"]["相关性阈值"] = 0.9
     
     def get_data_summary(self, module_name):
         """
