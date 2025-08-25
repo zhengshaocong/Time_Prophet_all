@@ -17,6 +17,7 @@ from statsmodels.tsa.vector_ar.var_model import VAR
 from utils.data_processor import DataProcessor
 from utils.interactive_utils import print_header, print_success, print_error, print_info, print_warning
 from config import DATA_DIR, OUTPUT_DIR, IMAGES_DIR, ARIMA_TRAINING_CONFIG
+from config.forecast import GLOBAL_FORECAST_CONFIG
 from utils.config_utils import get_field_name
 
 # 导入ARIMA相关模块
@@ -399,11 +400,24 @@ class ARIMAPredictorMain(DataProcessor):
             return False
 
         if steps is None:
-            steps = ARIMA_TRAINING_CONFIG["预测配置"]["预测步数"]  # 从配置文件读取预测步数
+            steps = ARIMA_TRAINING_CONFIG.get("预测配置", {}).get("预测步数", 30)  # 默认30天
 
         print_header("多变量ARIMA预测", f"预测未来{steps}天")
 
         try:
+            # 在预测前，根据全局配置统一调整步数，确保三条序列与日期索引长度一致
+            last_date = self.time_series.index[-1]
+            try:
+                if GLOBAL_FORECAST_CONFIG.get("enabled", False):
+                    end_date_str = GLOBAL_FORECAST_CONFIG.get("end_date_exclusive")
+                    if end_date_str:
+                        end_date_exclusive = pd.to_datetime(end_date_str)
+                        calc_steps = (end_date_exclusive - (last_date + pd.Timedelta(days=1))).days
+                        steps = max(0, calc_steps)
+                        print_info(f"全局预测结束日期生效，预测步数重设为: {steps}")
+            except Exception as e:
+                print_warning(f"全局预测时间配置处理失败，继续使用默认步数: {e}")
+
             # 预测净资金流
             print("预测净资金流...")
             net_flow_forecast = self.model.forecast(steps=steps)
@@ -496,7 +510,6 @@ class ARIMAPredictorMain(DataProcessor):
                 print(f"添加波动后赎回金额预测值范围: {redemption_forecast.min():.2f} 到 {redemption_forecast.max():.2f}")
 
             # 创建预测结果数据框
-            last_date = self.time_series.index[-1]
             future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=steps, freq='D')
 
             self.predictions = pd.Series(net_flow_forecast, index=future_dates)
@@ -528,8 +541,7 @@ class ARIMAPredictorMain(DataProcessor):
             output_dir.mkdir(parents=True, exist_ok=True)
 
             # 保存预测结果
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            predictions_file = output_dir / f"multi_arima_predictions_{timestamp}.csv"
+            predictions_file = output_dir / "multi_arima_predictions.csv"
 
             # 创建结果数据框
             results_df = pd.DataFrame({
@@ -542,6 +554,17 @@ class ARIMAPredictorMain(DataProcessor):
             # 保存到文件
             results_df.to_csv(predictions_file, index=False, encoding='utf-8')
             print_success(f"多变量预测结果已保存: {predictions_file}")
+
+            # 额外输出一份与 predict.py 匹配的CSV格式
+            # 列: report_date(YYYYMMDD字符串), purchase, redeem；编码: UTF-8-SIG
+            matched_df = pd.DataFrame({
+                'report_date': self.predictions.index.strftime('%Y%m%d'),
+                'purchase': self.purchase_predictions.values,
+                'redeem': self.redemption_predictions.values
+            })
+            matched_file = output_dir / "arima_forecast_201409.csv"
+            matched_df.to_csv(matched_file, index=False, encoding='utf-8-sig')
+            print_success(f"已额外输出与predict.py匹配的CSV: {matched_file}")
 
             return True
 
@@ -564,16 +587,14 @@ class ARIMAPredictorMain(DataProcessor):
             output_dir = IMAGES_DIR / "arima"
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
             # 1. 生成多变量综合预测图
             print_info("生成多变量综合预测图...")
-            comprehensive_file = output_dir / f"multi_comprehensive_predictions_{timestamp}.png"
+            comprehensive_file = output_dir / "multi_comprehensive_predictions.png"
             self._plot_multi_variable_predictions(comprehensive_file)
 
             # 2. 生成多变量预测摘要图
             print_info("生成多变量预测摘要图...")
-            summary_file = output_dir / f"multi_prediction_summary_{timestamp}.png"
+            summary_file = output_dir / "multi_prediction_summary.png"
             self._plot_multi_variable_summary(summary_file)
 
             print_success("增强多变量可视化图表生成完成")

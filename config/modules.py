@@ -63,6 +63,20 @@ ARIMA_PREDICTION_CONFIG = {
     }
 }
 
+# 经典分解法预测模块配置
+CLASSICAL_DECOMPOSITION_PREDICTION_CONFIG = {
+    "数据处理": {
+        "启用数据处理": True,       # 是否启用数据处理
+        "处理模式": "auto",         # 处理模式: auto(自动), manual(手动), skip(跳过)
+        "使用处理后数据": True,     # 是否优先使用全局预处理后的数据
+        "数据质量": {
+            "最小完整度": 0.9,      # 最小数据完整度
+            "最大缺失值比例": 0.1,   # 最大缺失值比例
+            "异常值处理": "clip"    # 异常值处理方式
+        }
+    }
+}
+
 # 模型评估模块配置
 MODEL_EVALUATION_CONFIG = {
     "数据处理": {

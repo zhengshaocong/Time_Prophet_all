@@ -912,8 +912,8 @@ class DataProcessingPipeline:
             return False
         
         if output_path is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = OUTPUT_DATA_DIR / f"processed_data_{timestamp}.csv"
+            # 使用覆盖模式，不添加时间戳
+            output_path = OUTPUT_DATA_DIR / "processed_data.csv"
         
         try:
             # 确保输出目录存在
@@ -924,9 +924,11 @@ class DataProcessingPipeline:
             print_success(f"处理后的数据已保存: {output_path}")
             
             # 保存处理日志
-            log_path = output_path.parent / f"processing_log_{timestamp}.json"
-            write_json(self.processing_log, log_path)
-            print_info(f"处理日志已保存: {log_path}")
+            log_path = output_path.parent / "processing_log.json"
+            if write_json(self.processing_log, log_path):
+                print_info(f"处理日志已保存: {log_path}")
+            else:
+                print_warning(f"处理日志保存失败: {log_path}")
             
             return True
             
@@ -944,13 +946,15 @@ class DataProcessingPipeline:
         if self.processed_data is None:
             return None
         
-        # 查找最新的处理后数据文件
-        output_dir = OUTPUT_DATA_DIR / "data"
+        # 查找最新的处理后数据文件（OUTPUT_DATA_DIR 已指向 output/data）
+        output_dir = OUTPUT_DATA_DIR
         if output_dir.exists():
-            processed_files = list(output_dir.glob("processed_data_*.csv"))
-            if processed_files:
-                # 按修改时间排序，返回最新的
-                latest_file = max(processed_files, key=lambda x: x.stat().st_mtime)
+            candidates = []
+            candidates.extend(list(output_dir.glob("processed_data_*.csv")))
+            candidates.extend(list(output_dir.glob("*_processed_*.csv")))
+            candidates = list({p: None for p in candidates}.keys())
+            if candidates:
+                latest_file = max(candidates, key=lambda x: x.stat().st_mtime)
                 return str(latest_file)
         
         return None

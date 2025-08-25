@@ -61,7 +61,8 @@ class DataProcessingManager:
         config_map = {
             "basic_analysis": BASIC_ANALYSIS_CONFIG,
             "data_preprocessing": MODULE_DATA_PREPROCESSING_CONFIG,
-            "arima_prediction": ARIMA_PREDICTION_CONFIG
+            "arima_prediction": ARIMA_PREDICTION_CONFIG,
+            "classical_decomposition": __import__('config', fromlist=['modules']).modules.CLASSICAL_DECOMPOSITION_PREDICTION_CONFIG
         }
         
         return config_map.get(module_name, {})
@@ -103,13 +104,20 @@ class DataProcessingManager:
             if cache_info.get("exists", False):
                 return cache_info["path"]
         
-        # 查找最新的处理后数据文件
-        output_dir = OUTPUT_DATA_DIR / "data"
+        # 查找最新的处理后数据文件（注意：OUTPUT_DATA_DIR 已是 output/data）
+        output_dir = OUTPUT_DATA_DIR
         if output_dir.exists():
-            processed_files = list(output_dir.glob("processed_data_*.csv"))
-            if processed_files:
-                # 按修改时间排序，返回最新的
-                latest_file = max(processed_files, key=lambda x: x.stat().st_mtime)
+            # 放宽匹配规则，兼容常见命名：processed_data_*.csv、*_processed_*.csv、*_processed.csv
+            candidates = []
+            candidates.extend(list(output_dir.glob("processed_data_*.csv")))
+            candidates.extend(list(output_dir.glob("*_processed_*.csv")))
+            candidates.extend(list(output_dir.glob("*_processed.csv")))
+            # 进一步兼容任意包含 processed 的命名
+            candidates.extend(list(output_dir.glob("*processed*.csv")))
+            # 去重
+            candidates = list({p: None for p in candidates}.keys())
+            if candidates:
+                latest_file = max(candidates, key=lambda x: x.stat().st_mtime)
                 return str(latest_file)
         
         return None

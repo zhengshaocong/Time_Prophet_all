@@ -4,9 +4,16 @@
 """
 
 from utils.config_utils import ensure_directories, validate_config
+import pandas as pd
 from utils.interactive_utils import print_header, print_success, print_error, show_menu, wait_for_key
 from src.analysis.basic_analysis import run_basic_data_analysis
 from src.prediction.arima_predictor import run_arima_prediction
+from src.prediction.prophet import run_prophet_prediction
+from src.prediction.classical_decomposition import ClassicalDecompositionPredictor
+from src.prediction.fusion_predictor import run_fusion_prediction
+from config.classical_decomposition_config import CLASSICAL_DECOMPOSITION_CONFIG
+from utils.interactive_utils import print_info
+from utils.data_processing_manager import get_processed_data_path
 from src.data_processing import run_data_processing
 from config import DATA_DIR
 from utils.config_utils import config_management_menu
@@ -47,6 +54,21 @@ def show_main_menu():
             "action": run_arima_prediction
         },
         {
+            "name": "Prophet预测",
+            "description": "使用Prophet模型进行时间序列预测",
+            "action": run_prophet_prediction
+        },
+        {
+            "name": "经典分解法预测",
+            "description": "使用经典分解法进行时间序列预测",
+            "action": run_classical_decomposition_prediction
+        },
+        {
+            "name": "融合预测",
+            "description": "Prophet + ARIMA 加权融合预测（目标120分）",
+            "action": run_fusion_prediction
+        },
+        {
             "name": "配置管理",
             "description": "查看和修改数据源配置",
             "action": config_management_menu
@@ -83,3 +105,55 @@ def exit_program():
 
 if __name__ == "__main__":
     main() 
+
+
+def run_classical_decomposition_prediction():
+    """运行经典分解法预测"""
+    print_header("经典分解法预测")
+    try:
+        # 自动使用最新数据预处理结果
+        processed_path = get_processed_data_path("classical_decomposition")
+        if not processed_path:
+            print_error("未找到预处理结果，请先在主菜单运行【数据预处理】以生成处理后的数据")
+            return
+
+        # 读取预处理数据，仅用于列名检测
+        df = pd.read_csv(processed_path)
+        # 选择日期列与数值列（遵循系统标准字段）
+        if 'report_date' in df.columns:
+            date_col = 'report_date'
+        elif 'date' in df.columns:
+            date_col = 'date'
+        else:
+            print_error("预处理数据中未找到日期列（期望 'report_date' 或 'date'），请检查预处理配置")
+            return
+
+        if 'Net_Flow' in df.columns:
+            value_col = 'Net_Flow'
+        elif 'value' in df.columns:
+            value_col = 'value'
+        else:
+            print_error("预处理数据中未找到数值列（期望 'Net_Flow' 或 'value'），请检查预处理流程")
+            return
+
+        predictor = ClassicalDecompositionPredictor(CLASSICAL_DECOMPOSITION_CONFIG)
+        ok = predictor.run_prediction_pipeline(
+            processed_path, 
+            date_col, 
+            value_col,
+            period_type="weekday",
+            remove_periodic_effect=True,
+            smooth_window=3,
+            forecast_steps=30,
+            confidence_level=0.95
+        )
+        if ok:
+            predictor.print_summary()
+            predictor.save_prediction_results()
+            print_success("经典分解法预测完成")
+        else:
+            print_error("经典分解法预测失败")
+    except KeyboardInterrupt:
+        print_info("已取消")
+    except Exception as e:
+        print_error(f"运行失败: {e}")

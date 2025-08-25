@@ -541,9 +541,8 @@ class AdvancedDataProcessor:
         # 创建输出目录
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # 生成文件名
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"processed_data_{timestamp}"
+        # 生成文件名（覆盖模式）
+        filename = "processed_data"
         
         try:
             if output_format == "csv":

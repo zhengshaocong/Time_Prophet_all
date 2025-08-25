@@ -126,7 +126,6 @@ residual_analysis = analyzer.residual_analysis(model.resid)
 if residual_analysis:
     print(f"残差质量: {residual_analysis['quality_assessment']['overall_quality']}")
 ```
-```
 
 ### 交互式界面使用
 ```python
@@ -179,3 +178,48 @@ show_table(data, "用户列表")
 - 自动格式化表格
 - 列宽自适应
 - 清晰的分隔线 
+
+## 文件命名工具 (file_utils.py)
+
+### 功能特性
+- **文件命名管理器**: 提供统一的文件命名方法，支持多种命名模式
+- **覆盖模式**: 新文件覆盖旧文件，避免文件堆积，保持输出目录整洁
+- **版本模式**: 新文件添加版本号，保留历史版本，适合需要版本管理的场景
+- **时间戳模式**: 新文件添加时间戳，每次生成唯一文件名，适合调试和测试
+
+### 使用示例
+```python
+from utils.file_utils import (
+    get_overwrite_filename, get_version_filename, 
+    get_timestamp_filename, set_naming_mode
+)
+
+# 设置全局命名模式为覆盖模式
+set_naming_mode("overwrite")
+
+# 获取覆盖模式的文件名
+file_path = get_overwrite_filename("prediction_results", ".csv", "output/data")
+# 结果: output/data/prediction_results.csv
+
+# 获取版本模式的文件名
+file_path = get_version_filename("prediction_results", ".csv", "output/data")
+# 结果: output/data/prediction_results_v1.csv
+
+# 获取时间戳模式的文件名
+file_path = get_timestamp_filename("prediction_results", ".csv", "output/data")
+# 结果: output/data/prediction_results_20241201_143022.csv
+```
+
+### 配置说明
+- 默认模式为覆盖模式，确保输出目录整洁
+- 可通过配置文件 `config/file_naming.py` 调整各模块的命名策略
+- 支持为不同模块设置不同的命名模式
+
+## 注意事项
+
+1. **依赖管理**: 确保所有依赖包已正确安装
+2. **路径配置**: 使用相对路径时注意工作目录
+3. **编码问题**: 所有文件操作使用UTF-8编码
+4. **错误处理**: 工具函数都包含异常处理，返回None表示失败
+5. **性能考虑**: 大数据集处理时注意内存使用
+6. **文件命名**: 使用文件命名工具统一管理输出文件，避免文件堆积 

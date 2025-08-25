@@ -530,8 +530,8 @@ class UniversalDataProcessor:
             return False
         
         if output_path is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = OUTPUT_DATA_DIR / f"{self.data_source_name}_processed_{timestamp}.csv"
+            # 使用覆盖模式，不添加时间戳
+            output_path = OUTPUT_DATA_DIR / f"{self.data_source_name}_processed.csv"
         
         try:
             # 确保输出目录存在
@@ -542,15 +542,19 @@ class UniversalDataProcessor:
             print_success(f"处理后的数据已保存: {output_path}")
             
             # 保存处理日志
-            log_path = output_path.parent / f"{self.data_source_name}_processing_log_{timestamp}.json"
-            write_json(self.processing_log, log_path)
-            print_info(f"处理日志已保存: {log_path}")
+            log_path = output_path.parent / f"{self.data_source_name}_processing_log.json"
+            if write_json(self.processing_log, log_path):
+                print_info(f"处理日志已保存: {log_path}")
+            else:
+                print_warning(f"处理日志保存失败: {log_path}")
             
             # 保存异常检测结果
-            if hasattr(self, 'anomalies'):
-                anomaly_path = output_path.parent / f"{self.data_source_name}_anomalies_{timestamp}.json"
-                write_json(self.anomalies, anomaly_path)
-                print_info(f"异常检测结果已保存: {anomaly_path}")
+            if hasattr(self, 'anomalies') and self.anomalies:
+                anomaly_path = output_path.parent / f"{self.data_source_name}_anomalies.json"
+                if write_json(self.anomalies, anomaly_path):
+                    print_info(f"异常检测结果已保存: {anomaly_path}")
+                else:
+                    print_warning(f"异常检测结果保存失败: {anomaly_path}")
             
             return True
             
