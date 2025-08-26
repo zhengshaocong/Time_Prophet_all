@@ -14,7 +14,15 @@ GLOBAL_DATA_PROCESSING_CONFIG = {
     "数据源": "processed",          # 数据源: original(原始), processed(处理后)
     "缓存处理结果": True,           # 是否缓存处理结果
     "强制重新处理": False,          # 是否强制重新处理数据
-    "处理日志": True                # 是否记录处理日志
+    "处理日志": True,               # 是否记录处理日志
+    "预处理文件配置": {
+        "预处理文件名": "user_balance_table_processed.csv",  # 预处理数据文件名
+        "备用文件名": ["user_balance_table_processed_fixed.csv", "user_balance_table_daily_summary_fixed.csv"],  # 备用文件名列表
+        "文件路径": "output/data",  # 预处理文件存放路径
+        "强制使用预处理": True,     # 是否强制使用预处理数据，找不到则报错
+        "文件格式": "csv"           # 预处理文件格式
+    },
+
 }
 
 # ==================== 通用数据预处理配置 ====================

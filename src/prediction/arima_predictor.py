@@ -11,13 +11,25 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from statsmodels.tsa.arima.model import ARIMA
-from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.stattools import adfuller, kpss
+from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.vector_ar.var_model import VAR
 
 from utils.data_processor import DataProcessor
 from utils.interactive_utils import print_header, print_success, print_error, print_info, print_warning
-from config import DATA_DIR, OUTPUT_DIR, IMAGES_DIR, ARIMA_TRAINING_CONFIG
+from config import DATA_DIR, OUTPUT_DIR, IMAGES_DIR
 from config.forecast import GLOBAL_FORECAST_CONFIG
+from config.arima_config import (
+    ARIMA_TRAINING_CONFIG, 
+    ARIMA_OUTPUT_CONFIG, 
+    ARIMA_SEASONALITY_CONFIG,
+    ARIMA_OPTIMIZATION_CONFIG,
+    ARIMA_VISUALIZATION_CONFIG,
+    ARIMA_DATA_PREPROCESSING_CONFIG
+)
+import json
+from pathlib import Path
 from utils.config_utils import get_field_name
 
 # 导入ARIMA相关模块
@@ -46,6 +58,11 @@ class ARIMAPredictorMain(DataProcessor):
         # 自相关分析建议参数（用于收缩搜索范围）
         self.suggested_p = None
         self.suggested_q = None
+        
+        # 周期性检测结果
+        self.seasonal_periods = {}
+        self.seasonal_strength = {}
+        self.seasonal_patterns = {}
         self.predictions = None
         self.purchase_predictions = None
         self.redemption_predictions = None
@@ -56,33 +73,73 @@ class ARIMAPredictorMain(DataProcessor):
     def load_data(self, file_path=None, use_data_processing=False, module_name=None):
         """重写load_data方法，优先加载预处理后的数据"""
         try:
-            # 优先尝试加载预处理后的数据
-            processed_data_files = list(OUTPUT_DIR.glob("data/*processed*.csv"))
-
-            if processed_data_files:
-                # 按修改时间排序，选择最新的预处理数据
-                latest_file = max(processed_data_files, key=lambda x: x.stat().st_mtime)
-                print_info(f"找到预处理数据文件: {latest_file}")
-
-                # 加载预处理后的数据
-                self.data = pd.read_csv(latest_file, encoding='utf-8')
+            # 从配置文件获取预处理文件配置
+            from config.data_processing import GLOBAL_DATA_PROCESSING_CONFIG
+            preprocess_config = GLOBAL_DATA_PROCESSING_CONFIG.get("预处理文件配置", {})
+            
+            # 获取配置的预处理文件名和路径
+            primary_filename = preprocess_config.get("预处理文件名", "user_balance_table_processed.csv")
+            backup_filenames = preprocess_config.get("备用文件名", [])
+            file_path = preprocess_config.get("文件路径", "output/data")
+            force_use_preprocessed = preprocess_config.get("强制使用预处理", True)
+            file_format = preprocess_config.get("文件格式", "csv")
+            
+            print_info(f"查找预处理数据文件，配置路径: {file_path}")
+            print_info(f"主要文件名: {primary_filename}")
+            print_info(f"备用文件名: {backup_filenames}")
+            
+            # 构建完整的文件路径
+            if file_path.startswith("output"):
+                # 相对路径，从项目根目录开始
+                from config import ROOT_DIR
+                search_dir = ROOT_DIR / file_path
+            else:
+                search_dir = OUTPUT_DIR / file_path
+            
+            # 首先尝试主要文件名
+            primary_file = search_dir / primary_filename
+            if primary_file.exists():
+                print_info(f"找到主要预处理文件: {primary_file}")
+                self.data = pd.read_csv(primary_file, encoding='utf-8')
                 print_success(f"预处理数据加载成功: {len(self.data):,} 条记录")
                 print_info(f"数据包含 {len(self.data.columns)} 个特征")
-
+                
                 # 显示前几个特征列名
                 feature_columns = [col for col in self.data.columns if col not in ['user_id', 'report_date']]
                 print_info(f"特征列示例: {feature_columns[:5]}")
-
                 return True
+            
+            # 尝试备用文件名
+            for backup_filename in backup_filenames:
+                backup_file = search_dir / backup_filename
+                if backup_file.exists():
+                    print_info(f"找到备用预处理文件: {backup_file}")
+                    self.data = pd.read_csv(backup_file, encoding='utf-8')
+                    print_success(f"预处理数据加载成功: {len(self.data):,} 条记录")
+                    print_info(f"数据包含 {len(self.data.columns)} 个特征")
+                    
+                    # 显示前几个特征列名
+                    feature_columns = [col for col in self.data.columns if col not in ['user_id', 'report_date']]
+                    print_info(f"特征列示例: {feature_columns[:5]}")
+                    return True
+            
+            # 如果强制使用预处理数据但找不到，则报错
+            if force_use_preprocessed:
+                print_error(f"未找到预处理数据文件")
+                print_error(f"已尝试以下文件:")
+                print_error(f"  主要文件: {primary_file}")
+                for backup_filename in backup_filenames:
+                    print_error(f"  备用文件: {search_dir / backup_filename}")
+                print_error("请先运行数据预处理功能生成预处理数据")
+                return False
             else:
-                # 如果没有预处理数据，尝试加载原始数据
+                # 如果不强制使用预处理数据，尝试加载原始数据
                 data_file = DATA_DIR / "user_balance_table.csv"
                 if not data_file.exists():
                     print_error(f"未找到预处理数据或原始数据文件")
                     print_info("请先运行数据预处理功能")
                     return False
-
-                    
+                
                 print_info(f"加载原始数据文件: {data_file}")
                 self.data = pd.read_csv(data_file, encoding='utf-8')
                 print_success(f"原始数据加载成功: {len(self.data):,} 条记录")
@@ -217,6 +274,12 @@ class ARIMAPredictorMain(DataProcessor):
                 except Exception:
                     self.suggested_q = None
 
+            # 检测周期性模式
+            print("检测周期性模式...")
+            self._detect_seasonality(net_flow_series, 'Net_Flow')
+            self._detect_seasonality(purchase_series, 'Purchase_Amount')
+            self._detect_seasonality(redemption_series, 'Redemption_Amount')
+
             # 检查申购金额平稳性
             adf_result_purchase = adfuller(purchase_series)
             print(f"申购金额ADF统计量: {adf_result_purchase[0]:.4f}, p值: {adf_result_purchase[1]:.4f}")
@@ -273,108 +336,55 @@ class ARIMAPredictorMain(DataProcessor):
 
         try:
             # 训练净资金流模型
-            print("训练净资金流ARIMA模型...")
-            # 尝试不同的参数组合，选择AIC最小的
-            best_aic = float('inf')
-            best_model = None
-            best_params = None
-
-            # 从配置文件获取参数范围
-            model_config = ARIMA_TRAINING_CONFIG["模型参数"]["ARIMA参数"]
-            p_values = model_config["p_range"]
-            d_values = model_config["d_range"]
-            q_values = model_config["q_range"]
-
-            print(f"使用配置的参数范围: p={p_values}, d={d_values}, q={q_values}")
-
-            # 若有自相关分析的建议值，则以建议值为中心收缩p/q范围
-            try:
-                if self.suggested_p is not None:
-                    candidate_p = sorted(set([max(0, self.suggested_p - 1), self.suggested_p, self.suggested_p + 1]))
-                    narrowed_p = [v for v in candidate_p if v in p_values]
-                    if narrowed_p:
-                        p_values = narrowed_p
-                if self.suggested_q is not None:
-                    candidate_q = sorted(set([max(0, self.suggested_q - 1), self.suggested_q, self.suggested_q + 1]))
-                    narrowed_q = [v for v in candidate_q if v in q_values]
-                    if narrowed_q:
-                        q_values = narrowed_q
-                if (self.suggested_p is not None) or (self.suggested_q is not None):
-                    print(f"结合自相关分析后的参数范围: p={p_values}, q={q_values}")
-            except Exception as _:
-                # 遇到异常则保持原范围，避免影响已有流程
-                pass
-
-            for p in p_values:
-                for d in d_values:
-                    for q in q_values:
-                        try:
-                            model = ARIMA(self.time_series, order=(p, d, q))
-                            fitted_model = model.fit()
-                            if fitted_model.aic < best_aic:
-                                best_aic = fitted_model.aic
-                                best_model = fitted_model
-                                best_params = (p, d, q)
-                        except:
-                            continue
-
-            if best_model is None:
-                # 如果网格搜索失败，使用默认参数
-                print("网格搜索失败，使用默认参数")
-                self.model = ARIMA(self.time_series, order=(1, 1, 1)).fit()
+            print("训练净资金流模型...")
+            
+            # 检查是否有强季节性
+            seasonal_strength = self.seasonal_strength.get('Net_Flow', 0)
+            seasonal_periods = self.seasonal_periods.get('Net_Flow', [7])
+            main_period = seasonal_periods[0] if seasonal_periods else 7
+            
+            if seasonal_strength > 0.3 and len(self.time_series) >= main_period * 4:
+                # 使用SARIMA模型
+                print(f"  检测到强季节性（强度: {seasonal_strength:.4f}），使用SARIMA模型")
+                self.model = self._train_sarima_model(self.time_series, 'Net_Flow', main_period)
             else:
-                self.model = best_model
-                print(f"净资金流最佳参数: {best_params}, AIC: {best_aic:.4f}")
+                # 使用ARIMA模型
+                print(f"  使用ARIMA模型")
+                self.model = self._train_arima_model(self.time_series, 'Net_Flow')
 
             # 训练申购金额模型
-            print("训练申购金额ARIMA模型...")
-            best_aic_purchase = float('inf')
-            best_model_purchase = None
-            best_params_purchase = None
-
-            for p in p_values:
-                for d in d_values:
-                    for q in q_values:
-                        try:
-                            model = ARIMA(self.purchase_series, order=(p, d, q))
-                            fitted_model = model.fit()
-                            if fitted_model.aic < best_aic_purchase:
-                                best_aic_purchase = fitted_model.aic
-                                best_model_purchase = fitted_model
-                                best_params_purchase = (p, d, q)
-                        except:
-                            continue
-
-            if best_model_purchase is None:
-                self.purchase_model = ARIMA(self.purchase_series, order=(1, 1, 1)).fit()
+            print("训练申购金额模型...")
+            
+            # 检查是否有强季节性
+            seasonal_strength = self.seasonal_strength.get('Purchase_Amount', 0)
+            seasonal_periods = self.seasonal_periods.get('Purchase_Amount', [7])
+            main_period = seasonal_periods[0] if seasonal_periods else 7
+            
+            if seasonal_strength > 0.3 and len(self.purchase_series) >= main_period * 4:
+                # 使用SARIMA模型
+                print(f"  检测到强季节性（强度: {seasonal_strength:.4f}），使用SARIMA模型")
+                self.purchase_model = self._train_sarima_model(self.purchase_series, 'Purchase_Amount', main_period)
             else:
-                self.purchase_model = best_model_purchase
-                print(f"申购金额最佳参数: {best_params_purchase}, AIC: {best_aic_purchase:.4f}")
+                # 使用ARIMA模型
+                print(f"  使用ARIMA模型")
+                self.purchase_model = self._train_arima_model(self.purchase_series, 'Purchase_Amount')
 
             # 训练赎回金额模型
-            print("训练赎回金额ARIMA模型...")
-            best_aic_redemption = float('inf')
-            best_model_redemption = None
-            best_params_redemption = None
-
-            for p in p_values:
-                for d in d_values:
-                    for q in q_values:
-                        try:
-                            model = ARIMA(self.redemption_series, order=(p, d, q))
-                            fitted_model = model.fit()
-                            if fitted_model.aic < best_aic_redemption:
-                                best_aic_redemption = fitted_model.aic
-                                best_model_redemption = fitted_model
-                                best_params_redemption = (p, d, q)
-                        except:
-                            continue
-
-            if best_model_redemption is None:
-                self.redemption_model = ARIMA(self.redemption_series, order=(1, 1, 1)).fit()
+            print("训练赎回金额模型...")
+            
+            # 检查是否有强季节性
+            seasonal_strength = self.seasonal_strength.get('Redemption_Amount', 0)
+            seasonal_periods = self.seasonal_periods.get('Redemption_Amount', [7])
+            main_period = seasonal_periods[0] if seasonal_periods else 7
+            
+            if seasonal_strength > 0.3 and len(self.redemption_series) >= main_period * 4:
+                # 使用SARIMA模型
+                print(f"  检测到强季节性（强度: {seasonal_strength:.4f}），使用SARIMA模型")
+                self.redemption_model = self._train_sarima_model(self.redemption_series, 'Redemption_Amount', main_period)
             else:
-                self.redemption_model = best_model_redemption
-                print(f"赎回金额最佳参数: {best_params_redemption}, AIC: {best_aic_redemption:.4f}")
+                # 使用ARIMA模型
+                print(f"  使用ARIMA模型")
+                self.redemption_model = self._train_arima_model(self.redemption_series, 'Redemption_Amount')
 
             print_success("多变量ARIMA模型训练完成")
 
@@ -422,6 +432,13 @@ class ARIMAPredictorMain(DataProcessor):
             print("预测净资金流...")
             net_flow_forecast = self.model.forecast(steps=steps)
 
+            # 添加季节性调整
+            if 'Net_Flow' in self.seasonal_patterns:
+                seasonal_pattern = self.seasonal_patterns['Net_Flow']
+                if len(seasonal_pattern) > 0:
+                    print("  应用净资金流季节性调整...")
+                    net_flow_forecast = self._apply_seasonal_adjustment(net_flow_forecast, seasonal_pattern)
+
             # 添加一些随机波动，避免过于平稳
             np.random.seed(42)  # 设置随机种子确保可重复性
             noise_ratio = ARIMA_TRAINING_CONFIG.get("预测配置", {}).get("噪声比例", 0.1)  # 从配置文件读取噪声比例
@@ -442,6 +459,13 @@ class ARIMAPredictorMain(DataProcessor):
             print(f"申购金额时间序列范围: {self.purchase_series.min():.2f} 到 {self.purchase_series.max():.2f}")
             print(f"申购金额时间序列均值: {self.purchase_series.mean():.2f}")
             purchase_forecast = self.purchase_model.forecast(steps=steps)
+
+            # 添加季节性调整
+            if 'Purchase_Amount' in self.seasonal_patterns:
+                seasonal_pattern = self.seasonal_patterns['Purchase_Amount']
+                if len(seasonal_pattern) > 0:
+                    print("  应用申购金额季节性调整...")
+                    purchase_forecast = self._apply_seasonal_adjustment(purchase_forecast, seasonal_pattern)
 
             # 添加一些随机波动，避免过于平稳
             noise_ratio_purchase = ARIMA_TRAINING_CONFIG.get("预测配置", {}).get("申购噪声比例", 0.15)  # 从配置文件读取申购噪声比例
@@ -465,6 +489,13 @@ class ARIMAPredictorMain(DataProcessor):
             print(f"赎回金额时间序列范围: {self.redemption_series.min():.2f} 到 {self.redemption_series.max():.2f}")
             print(f"赎回金额时间序列均值: {self.redemption_series.mean():.2f}")
             redemption_forecast = self.redemption_model.forecast(steps=steps)
+
+            # 添加季节性调整
+            if 'Redemption_Amount' in self.seasonal_patterns:
+                seasonal_pattern = self.seasonal_patterns['Redemption_Amount']
+                if len(seasonal_pattern) > 0:
+                    print("  应用赎回金额季节性调整...")
+                    redemption_forecast = self._apply_seasonal_adjustment(redemption_forecast, seasonal_pattern)
 
             # 添加更多的随机波动，避免过于平稳
             noise_ratio_redemption = ARIMA_TRAINING_CONFIG.get("预测配置", {}).get("赎回噪声比例", 0.25)  # 增加噪声比例
@@ -536,12 +567,16 @@ class ARIMAPredictorMain(DataProcessor):
             return False
 
         try:
+            # 从配置文件获取输出路径
+            data_output_path = ARIMA_OUTPUT_CONFIG.get("数据输出路径", "output/arima")
+            data_format = ARIMA_OUTPUT_CONFIG.get("数据格式", "csv")
+            
             # 创建输出目录
-            output_dir = OUTPUT_DIR / "data"
-            output_dir.mkdir(parents=True, exist_ok=True)
+            import os
+            os.makedirs(data_output_path, exist_ok=True)
 
             # 保存预测结果
-            predictions_file = output_dir / "multi_arima_predictions.csv"
+            predictions_file = os.path.join(data_output_path, f"multi_arima_predictions.{data_format}")
 
             # 创建结果数据框
             results_df = pd.DataFrame({
@@ -562,7 +597,7 @@ class ARIMAPredictorMain(DataProcessor):
                 'purchase': self.purchase_predictions.values,
                 'redeem': self.redemption_predictions.values
             })
-            matched_file = output_dir / "arima_forecast_201409.csv"
+            matched_file = os.path.join(data_output_path, f"arima_forecast_201409.{data_format}")
             matched_df.to_csv(matched_file, index=False, encoding='utf-8-sig')
             print_success(f"已额外输出与predict.py匹配的CSV: {matched_file}")
 
@@ -583,18 +618,21 @@ class ARIMAPredictorMain(DataProcessor):
         print_header("生成增强多变量可视化图表", "申购赎回净资金流预测结果")
 
         try:
+            # 从配置文件获取输出路径
+            image_output_path = ARIMA_OUTPUT_CONFIG.get("图片保存路径", "output/arima")
+            
             # 创建输出目录
-            output_dir = IMAGES_DIR / "arima"
-            output_dir.mkdir(parents=True, exist_ok=True)
+            import os
+            os.makedirs(image_output_path, exist_ok=True)
 
             # 1. 生成多变量综合预测图
             print_info("生成多变量综合预测图...")
-            comprehensive_file = output_dir / "multi_comprehensive_predictions.png"
+            comprehensive_file = os.path.join(image_output_path, "multi_comprehensive_predictions.png")
             self._plot_multi_variable_predictions(comprehensive_file)
 
             # 2. 生成多变量预测摘要图
             print_info("生成多变量预测摘要图...")
-            summary_file = output_dir / "multi_prediction_summary.png"
+            summary_file = os.path.join(image_output_path, "multi_prediction_summary.png")
             self._plot_multi_variable_summary(summary_file)
 
             print_success("增强多变量可视化图表生成完成")
@@ -771,6 +809,437 @@ class ARIMAPredictorMain(DataProcessor):
             print_error(f"多变量ARIMA分析失败: {e}")
             return False
 
+    # ==================== 模型训练方法 ====================
+
+    def _train_sarima_model(self, series, series_name, seasonal_period):
+        """训练SARIMA模型（会遍历候选周期）"""
+        try:
+            # 参数缓存：键 = (series_name, seasonal_period)
+            cache_conf = ARIMA_OPTIMIZATION_CONFIG.get("参数缓存", {"启用": False})
+            cache_enabled = cache_conf.get("启用", False)
+            cache_path = Path(cache_conf.get("路径", "cache/arima_param_cache.json"))
+            cache = {}
+            if cache_enabled and cache_path.exists():
+                try:
+                    cache = json.load(open(cache_path, 'r'))
+                except Exception:
+                    cache = {}
+            cache_key = f"SARIMA::{series_name}::s={seasonal_period}"
+            if cache_enabled and cache_key in cache:
+                params = cache[cache_key]
+                try:
+                    model = SARIMAX(
+                        series,
+                        order=tuple(params["order"]),
+                        seasonal_order=tuple(params["seasonal_order"]),
+                        enforce_stationarity=False,
+                        enforce_invertibility=False
+                    )
+                    fitted_model = model.fit(disp=False)
+                    print_success(
+                        f"  使用缓存参数 → SARIMA order={params['order']}, seasonal={params['seasonal_order']}"
+                    )
+                    try:
+                        s_cache = params["seasonal_order"][3]
+                        print_info(f"  最终选择季节周期 s={s_cache}（来源: 缓存）")
+                    except Exception:
+                        pass
+                    return fitted_model
+                except Exception:
+                    print_warning("  缓存参数无效，退回搜索")
+
+            # SARIMA参数网格搜索
+            best_aic = float('inf')
+            best_model = None
+            best_params = None
+            
+            # 参数范围
+            mconf = ARIMA_TRAINING_CONFIG["模型参数"]["ARIMA参数"]["季节性参数"]
+            p_range = [0, 1, 2, 3]
+            d_range = [0, 1]
+            q_range = [0, 1, 2, 3]
+            P_range = mconf.get("P_range", [0,1,2])
+            D_range = mconf.get("D_range", [0,1])
+            Q_range = mconf.get("Q_range", [0,1,2])
+            seasonal_candidates = mconf.get("候选周期", [seasonal_period])
+            
+            print(f"  SARIMA参数搜索范围: p={p_range}, d={d_range}, q={q_range}")
+            print(f"  季节性参数: P={P_range}, D={D_range}, Q={Q_range}, s候选={seasonal_candidates}")
+            
+            # 限制搜索次数
+            max_combinations = 30
+            combinations_tried = 0
+            
+            for s in seasonal_candidates:
+                for p in p_range:
+                    for d in d_range:
+                        for q in q_range:
+                            for P in P_range:
+                                for D in D_range:
+                                    for Q in Q_range:
+                                        if combinations_tried >= max_combinations:
+                                            break
+                                        try:
+                                            model = SARIMAX(
+                                                series,
+                                                order=(p, d, q),
+                                                seasonal_order=(P, D, Q, s),
+                                                enforce_stationarity=False,
+                                                enforce_invertibility=False
+                                            )
+                                            fitted_model = model.fit(disp=False)
+                                            aic = fitted_model.aic
+                                            if aic < best_aic:
+                                                best_aic = aic
+                                                best_model = fitted_model
+                                                best_params = (p, d, q, P, D, Q, s)
+                                            combinations_tried += 1
+                                        except Exception:
+                                            continue
+                                
+                                if combinations_tried >= max_combinations:
+                                    break
+                            if combinations_tried >= max_combinations:
+                                break
+                        if combinations_tried >= max_combinations:
+                            break
+                    if combinations_tried >= max_combinations:
+                        break
+                if combinations_tried >= max_combinations:
+                    break
+            
+            if best_model is not None:
+                print(f"  SARIMA最佳参数: {best_params}, AIC: {best_aic:.2f}")
+                # 日志：输出最终选择的季节周期
+                try:
+                    print_info(f"  最终选择季节周期 s={best_params[6]}（来源: 搜索）")
+                except Exception:
+                    pass
+                if cache_enabled:
+                    cache[cache_key] = {
+                        "order": list(best_params[:3]),
+                        "seasonal_order": [best_params[3], best_params[4], best_params[5], best_params[6]]
+                    }
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    json.dump(cache, open(cache_path, 'w'), ensure_ascii=False, indent=2)
+                return best_model
+            else:
+                print_warning(f"  {series_name} SARIMA模型训练失败，回退到ARIMA")
+                return self._train_arima_model(series, series_name)
+                
+        except Exception as e:
+            print_warning(f"  {series_name} SARIMA训练失败: {e}")
+            return self._train_arima_model(series, series_name)
+
+    def _train_arima_model(self, series, series_name):
+        """训练ARIMA模型"""
+        try:
+            # 参数缓存
+            cache_conf = ARIMA_OPTIMIZATION_CONFIG.get("参数缓存", {"启用": False})
+            cache_enabled = cache_conf.get("启用", False)
+            cache_path = Path(cache_conf.get("路径", "cache/arima_param_cache.json"))
+            cache = {}
+            if cache_enabled and cache_path.exists():
+                try:
+                    cache = json.load(open(cache_path, 'r'))
+                except Exception:
+                    cache = {}
+            cache_key = f"ARIMA::{series_name}"
+            if cache_enabled and cache_key in cache:
+                params = cache[cache_key]
+                try:
+                    model = ARIMA(series, order=tuple(params))
+                    fitted_model = model.fit()
+                    print_success(f"  使用缓存参数 → ARIMA order={tuple(params)}")
+                    return fitted_model
+                except Exception:
+                    print_warning("  缓存参数无效，退回搜索")
+
+            best_aic = float('inf')
+            best_model = None
+            best_params = None
+            
+            # 从配置文件获取参数范围
+            model_config = ARIMA_TRAINING_CONFIG["模型参数"]["ARIMA参数"]
+            p_values = model_config["p_range"]
+            d_values = model_config["d_range"]
+            q_values = model_config["q_range"]
+            
+            print(f"  ARIMA参数搜索范围: p={p_values}, d={d_values}, q={q_values}")
+            
+            # 若有自相关分析的建议值，则以建议值为中心收缩p/q范围
+            try:
+                if self.suggested_p is not None:
+                    candidate_p = sorted(set([max(0, self.suggested_p - 1), self.suggested_p, self.suggested_p + 1]))
+                    narrowed_p = [v for v in candidate_p if v in p_values]
+                    if narrowed_p:
+                        p_values = narrowed_p
+                if self.suggested_q is not None:
+                    candidate_q = sorted(set([max(0, self.suggested_q - 1), self.suggested_q, self.suggested_q + 1]))
+                    narrowed_q = [v for v in candidate_q if v in q_values]
+                    if narrowed_q:
+                        q_values = narrowed_q
+                if (self.suggested_p is not None) or (self.suggested_q is not None):
+                    print(f"  结合自相关分析后的参数范围: p={p_values}, q={q_values}")
+            except Exception as _:
+                pass
+            
+            # 限制搜索次数
+            max_combinations = ARIMA_OPTIMIZATION_CONFIG.get("搜索策略", {}).get("最大组合数", 20)
+            combinations_tried = 0
+            
+            for p in p_values:
+                for d in d_values:
+                    for q in q_values:
+                        if combinations_tried >= max_combinations:
+                            break
+                            
+                        try:
+                            model = ARIMA(series, order=(p, d, q))
+                            fitted_model = model.fit()
+                            aic = fitted_model.aic
+                            
+                            if aic < best_aic:
+                                best_aic = aic
+                                best_model = fitted_model
+                                best_params = (p, d, q)
+                                
+                            combinations_tried += 1
+                            
+                        except Exception:
+                            continue
+                    
+                    if combinations_tried >= max_combinations:
+                        break
+                if combinations_tried >= max_combinations:
+                    break
+            
+            if best_model is not None:
+                print(f"  ARIMA最佳参数: {best_params}, AIC: {best_aic:.2f}")
+                print_info("  参数来源: 搜索")
+                if cache_enabled:
+                    cache[cache_key] = list(best_params)
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    json.dump(cache, open(cache_path, 'w'), ensure_ascii=False, indent=2)
+                return best_model
+            else:
+                print_warning(f"  {series_name} ARIMA模型训练失败，使用默认参数")
+                return ARIMA(series, order=(1, 1, 1)).fit()
+                
+        except Exception as e:
+            print_error(f"  {series_name} ARIMA训练失败: {e}")
+            return ARIMA(series, order=(1, 1, 1)).fit()
+
+    # ==================== 周期性检测方法 ====================
+
+    def _detect_seasonality(self, series, series_name):
+        """检测季节性"""
+        try:
+            print(f"检测 {series_name} 的季节性...")
+            
+            # 1. 自相关分析检测周期性
+            lags = min(50, len(series) // 4)
+            acf_values = pd.Series(series).autocorr(lag=1)
+            
+            # 检测主要周期
+            periods = []
+            for period in [7, 14, 30, 90, 365]:  # 周、双周、月、季度、年
+                if len(series) >= period * 2:
+                    seasonal_score = self._calculate_seasonal_score(series, period)
+                    if seasonal_score > 0.3:  # 阈值可调整
+                        periods.append(period)
+                        print_info(f"  检测到 {period} 天周期，强度: {seasonal_score:.4f}")
+            
+            # 2. 季节性分解
+            if len(series) >= 30:
+                try:
+                    decomposition = seasonal_decompose(series, period=7, extrapolate_trend='freq')
+                    seasonal_strength = np.var(decomposition.seasonal) / np.var(series)
+                    
+                    self.seasonal_periods[series_name] = periods
+                    self.seasonal_strength[series_name] = seasonal_strength
+                    self.seasonal_patterns[series_name] = decomposition.seasonal
+                    
+                    print_info(f"  {series_name} 季节性强度: {seasonal_strength:.4f}")
+                    
+                except Exception as e:
+                    print_warning(f"季节性分解失败: {e}")
+                    self.seasonal_periods[series_name] = [7]  # 默认周周期
+                    self.seasonal_strength[series_name] = 0.1
+            else:
+                self.seasonal_periods[series_name] = [7]
+                self.seasonal_strength[series_name] = 0.1
+                
+        except Exception as e:
+            print_warning(f"季节性检测失败: {e}")
+            self.seasonal_periods[series_name] = [7]
+            self.seasonal_strength[series_name] = 0.1
+
+    def _calculate_seasonal_score(self, series, period):
+        """计算季节性得分"""
+        try:
+            if len(series) < period * 2:
+                return 0
+            
+            # 计算不同周期段之间的相关性
+            segments = []
+            for i in range(0, len(series) - period, period):
+                segment = series.iloc[i:i+period]
+                if len(segment) == period:
+                    segments.append(segment.values)
+            
+            if len(segments) < 2:
+                return 0
+            
+            # 计算段间相关性
+            correlations = []
+            for i in range(len(segments)):
+                for j in range(i+1, len(segments)):
+                    corr = np.corrcoef(segments[i], segments[j])[0, 1]
+                    if not np.isnan(corr):
+                        correlations.append(corr)
+            
+            if correlations:
+                return np.mean(correlations)
+            return 0
+            
+        except Exception:
+            return 0
+
+    def _apply_seasonal_adjustment(self, forecast, seasonal_pattern):
+        """应用季节性调整"""
+        try:
+            pattern_length = len(seasonal_pattern)
+            if pattern_length == 0:
+                return forecast
+            
+            # 获取季节性模式的均值
+            seasonal_mean = seasonal_pattern.mean()
+            
+            # 应用季节性调整
+            adjusted_forecast = forecast.copy()
+            for i in range(len(forecast)):
+                pattern_index = i % pattern_length
+                seasonal_factor = seasonal_pattern.iloc[pattern_index] - seasonal_mean
+                adjusted_forecast.iloc[i] += seasonal_factor * 0.3  # 调整强度
+            
+            return adjusted_forecast
+            
+        except Exception as e:
+            print_warning(f"季节性调整失败: {e}")
+            return forecast
+
+    def generate_purchase_redemption_visualization(self):
+            """生成申购赎回历史数据与预测数据的对比可视化图"""
+            try:
+                print_header("生成申购赎回可视化图")
+                
+                if (self.original_purchase_series is None or 
+                    self.original_redemption_series is None or
+                    self.purchase_predictions is None or
+                    self.redemption_predictions is None):
+                    print_error("缺少必要的数据，无法生成可视化图")
+                    return False
+                
+                import matplotlib.pyplot as plt
+                import matplotlib.dates as mdates
+                from datetime import datetime
+                
+                # 设置中文字体
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
+                plt.rcParams['axes.unicode_minus'] = False
+                
+                # 创建图形
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12))
+                
+                # 获取历史数据的时间范围
+                historical_dates = self.original_purchase_series.index
+                forecast_dates = self.purchase_predictions.index
+                
+                # 1. 申购金额对比图
+                # 确保数据类型正确
+                historical_purchase_values = pd.to_numeric(self.original_purchase_series.values, errors='coerce')
+                forecast_purchase_values = pd.to_numeric(self.purchase_predictions.values, errors='coerce')
+                
+                ax1.plot(historical_dates, historical_purchase_values, 
+                        color='blue', linewidth=2, label='历史申购金额', alpha=0.8)
+                ax1.plot(forecast_dates, forecast_purchase_values, 
+                        color='blue', linewidth=2, linestyle='--', label='预测申购金额', alpha=0.8)
+                
+                # 添加分隔线
+                if len(historical_dates) > 0:
+                    last_historical_date = historical_dates[-1]
+                    ax1.axvline(x=last_historical_date, color='red', linestyle=':', alpha=0.7, 
+                               label='历史/预测分界线')
+                
+                ax1.set_title('申购金额历史数据与预测数据对比', fontsize=16, fontweight='bold')
+                ax1.set_xlabel('日期', fontsize=12)
+                ax1.set_ylabel('申购金额', fontsize=12)
+                ax1.legend(fontsize=10)
+                ax1.grid(True, alpha=0.3)
+                
+                # 格式化x轴日期
+                ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+                ax1.xaxis.set_major_locator(mdates.MonthLocator())
+                plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
+                
+                # 2. 赎回金额对比图
+                # 确保数据类型正确
+                historical_redemption_values = pd.to_numeric(self.original_redemption_series.values, errors='coerce')
+                forecast_redemption_values = pd.to_numeric(self.redemption_predictions.values, errors='coerce')
+                
+                ax2.plot(historical_dates, historical_redemption_values, 
+                        color='red', linewidth=2, label='历史赎回金额', alpha=0.8)
+                ax2.plot(forecast_dates, forecast_redemption_values, 
+                        color='red', linewidth=2, linestyle='--', label='预测赎回金额', alpha=0.8)
+                
+                # 添加分隔线
+                if len(historical_dates) > 0:
+                    ax2.axvline(x=last_historical_date, color='red', linestyle=':', alpha=0.7, 
+                               label='历史/预测分界线')
+                
+                ax2.set_title('赎回金额历史数据与预测数据对比', fontsize=16, fontweight='bold')
+                ax2.set_xlabel('日期', fontsize=12)
+                ax2.set_ylabel('赎回金额', fontsize=12)
+                ax2.legend(fontsize=10)
+                ax2.grid(True, alpha=0.3)
+                
+                # 格式化x轴日期
+                ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+                ax2.xaxis.set_major_locator(mdates.MonthLocator())
+                plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
+                
+                # 调整布局
+                plt.tight_layout()
+                
+                # 保存图片
+                import os
+                
+                # 从配置文件获取保存路径
+                image_path = ARIMA_OUTPUT_CONFIG.get("图片保存路径", "output/arima")
+                image_format = ARIMA_OUTPUT_CONFIG.get("图片格式", "png")
+                image_dpi = ARIMA_OUTPUT_CONFIG.get("图片DPI", 300)
+                
+                # 确保目录存在
+                os.makedirs(image_path, exist_ok=True)
+                
+                filename = f"purchase_redemption_forecast_comparison.{image_format}"
+                full_path = os.path.join(image_path, filename)
+                
+                # 直接保存图片
+                plt.savefig(full_path, dpi=image_dpi, bbox_inches='tight')
+                print_success(f"申购赎回可视化图已保存: {full_path}")
+                
+                print_success(f"申购赎回可视化图已保存: {filename}")
+                
+                # 显示图片
+                plt.show()
+                
+                return True
+                
+            except Exception as e:
+                print_error(f"生成申购赎回可视化图失败: {e}")
+                return False
 
 
 def run_arima_prediction():
@@ -795,3 +1264,176 @@ def run_arima_prediction():
         print_error("多变量ARIMA预测分析失败")
 
     return success
+
+
+def _train_arima_model(self, series, series_name):
+    """训练ARIMA模型"""
+    try:
+        best_aic = float('inf')
+        best_model = None
+        best_params = None
+        
+        # 从配置文件获取参数范围
+        model_config = ARIMA_TRAINING_CONFIG["模型参数"]["ARIMA参数"]
+        p_values = model_config["p_range"]
+        d_values = model_config["d_range"]
+        q_values = model_config["q_range"]
+        
+        print(f"  ARIMA参数搜索范围: p={p_values}, d={d_values}, q={q_values}")
+        
+        # 若有自相关分析的建议值，则以建议值为中心收缩p/q范围
+        try:
+            if self.suggested_p is not None:
+                candidate_p = sorted(set([max(0, self.suggested_p - 1), self.suggested_p, self.suggested_p + 1]))
+                narrowed_p = [v for v in candidate_p if v in p_values]
+                if narrowed_p:
+                    p_values = narrowed_p
+            if self.suggested_q is not None:
+                candidate_q = sorted(set([max(0, self.suggested_q - 1), self.suggested_q, self.suggested_q + 1]))
+                narrowed_q = [v for v in candidate_q if v in q_values]
+                if narrowed_q:
+                    q_values = narrowed_q
+            if (self.suggested_p is not None) or (self.suggested_q is not None):
+                print(f"  结合自相关分析后的参数范围: p={p_values}, q={q_values}")
+        except Exception as _:
+            pass
+        
+        # 限制搜索次数
+        max_combinations = 20
+        combinations_tried = 0
+        
+        for p in p_values:
+            for d in d_values:
+                for q in q_values:
+                    if combinations_tried >= max_combinations:
+                        break
+                        
+                    try:
+                        model = ARIMA(series, order=(p, d, q))
+                        fitted_model = model.fit()
+                        aic = fitted_model.aic
+                        
+                        if aic < best_aic:
+                            best_aic = aic
+                            best_model = fitted_model
+                            best_params = (p, d, q)
+                            
+                        combinations_tried += 1
+                        
+                    except Exception:
+                        continue
+                
+                if combinations_tried >= max_combinations:
+                    break
+            if combinations_tried >= max_combinations:
+                break
+        
+        if best_model is not None:
+            print(f"  ARIMA最佳参数: {best_params}, AIC: {best_aic:.2f}")
+            return best_model
+        else:
+            print_warning(f"  {series_name} ARIMA模型训练失败，使用默认参数")
+            return ARIMA(series, order=(1, 1, 1)).fit()
+            
+    except Exception as e:
+        print_error(f"  {series_name} ARIMA训练失败: {e}")
+        return ARIMA(series, order=(1, 1, 1)).fit()
+
+    # ==================== 周期性检测方法 ====================
+
+    def _detect_seasonality(self, series, series_name):
+        """检测季节性"""
+        try:
+            print(f"检测 {series_name} 的季节性...")
+            
+            # 1. 自相关分析检测周期性
+            lags = min(50, len(series) // 4)
+            acf_values = pd.Series(series).autocorr(lag=1)
+            
+            # 检测主要周期
+            periods = []
+            for period in [7, 14, 30, 90, 365]:  # 周、双周、月、季度、年
+                if len(series) >= period * 2:
+                    seasonal_score = self._calculate_seasonal_score(series, period)
+                    if seasonal_score > 0.3:  # 阈值可调整
+                        periods.append(period)
+                        print_info(f"  检测到 {period} 天周期，强度: {seasonal_score:.4f}")
+            
+            # 2. 季节性分解
+            if len(series) >= 30:
+                try:
+                    decomposition = seasonal_decompose(series, period=7, extrapolate_trend='freq')
+                    seasonal_strength = np.var(decomposition.seasonal) / np.var(series)
+                    
+                    self.seasonal_periods[series_name] = periods
+                    self.seasonal_strength[series_name] = seasonal_strength
+                    self.seasonal_patterns[series_name] = decomposition.seasonal
+                    
+                    print_info(f"  {series_name} 季节性强度: {seasonal_strength:.4f}")
+                    
+                except Exception as e:
+                    print_warning(f"季节性分解失败: {e}")
+                    self.seasonal_periods[series_name] = [7]  # 默认周周期
+                    self.seasonal_strength[series_name] = 0.1
+            else:
+                self.seasonal_periods[series_name] = [7]
+                self.seasonal_strength[series_name] = 0.1
+                
+        except Exception as e:
+            print_warning(f"季节性检测失败: {e}")
+            self.seasonal_periods[series_name] = [7]
+            self.seasonal_strength[series_name] = 0.1
+
+    def _calculate_seasonal_score(self, series, period):
+        """计算季节性得分"""
+        try:
+            if len(series) < period * 2:
+                return 0
+            
+            # 计算不同周期段之间的相关性
+            segments = []
+            for i in range(0, len(series) - period, period):
+                segment = series.iloc[i:i+period]
+                if len(segment) == period:
+                    segments.append(segment.values)
+            
+            if len(segments) < 2:
+                return 0
+            
+            # 计算段间相关性
+            correlations = []
+            for i in range(len(segments)):
+                for j in range(i+1, len(segments)):
+                    corr = np.corrcoef(segments[i], segments[j])[0, 1]
+                    if not np.isnan(corr):
+                        correlations.append(corr)
+            
+            if correlations:
+                return np.mean(correlations)
+            return 0
+            
+        except Exception:
+            return 0
+
+    def _apply_seasonal_adjustment(self, forecast, seasonal_pattern):
+        """应用季节性调整"""
+        try:
+            pattern_length = len(seasonal_pattern)
+            if pattern_length == 0:
+                return forecast
+            
+            # 获取季节性模式的均值
+            seasonal_mean = seasonal_pattern.mean()
+            
+            # 应用季节性调整
+            adjusted_forecast = forecast.copy()
+            for i in range(len(forecast)):
+                pattern_index = i % pattern_length
+                seasonal_factor = seasonal_pattern.iloc[pattern_index] - seasonal_mean
+                adjusted_forecast.iloc[i] += seasonal_factor * 0.3  # 调整强度
+            
+            return adjusted_forecast
+            
+        except Exception as e:
+            print_warning(f"季节性调整失败: {e}")
+            return forecast

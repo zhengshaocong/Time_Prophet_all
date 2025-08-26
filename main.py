@@ -102,10 +102,11 @@ def show_main_menu():
             "action": run_data_processing
         },
         {
-            "name": "ARIMA预测",
-            "description": "使用ARIMA模型进行时间序列预测",
+            "name": "ARIMA预测（增强版）",
+            "description": "集成周期性因子的ARIMA/SARIMA预测，自动检测季节性并优化模型",
             "action": run_arima_prediction
         },
+
         {
             "name": "Prophet预测",
             "description": "使用Prophet模型进行时间序列预测",
